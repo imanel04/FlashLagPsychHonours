@@ -45,6 +45,8 @@ library(broom.mixed)
 # MIXED MODELS
 library(lme4) # mle
 library(lmerTest)
+library(performance)
+library(parameters)
 
 # BAYESIAN
 library(rstan)
@@ -107,6 +109,14 @@ myOverallJoV <- read.csv("/Users/imanelattab/Desktop/Cottier2023/Cottier2023_2Se
 
 # 8 staircases (8 repeated measures)
 all_staircase_FLEs <- read.csv("/Users/imanelattab/Desktop/Cottier2023/FLE_Raw/all_participants_staircase_FLEs.csv")
+
+# ID, session, and staircase as categorical
+all_staircase_FLEs <- all_staircase_FLEs |>
+  dplyr::mutate(
+    ID = factor(ID),
+    session = factor(session),
+    staircase = factor(staircase)
+  )
 ```
 
 
@@ -116,17 +126,225 @@ The data analyses that is available on the OSF of the original paper had used se
 
 ::: panel-tabset
 
-#### Dataset
+
+#### Data (Sessions)
 
 ```{r}
-datatable(myOverallJoV, 
-          options = list(
-            pageLength = 10,
-            scrollX = TRUE),
-          caption = "Cottier et al. (2023) 2 Sessions")
+# Calculate one mean FLE magnitude per participant
+myOverallJoV_means <- myOverallJoV |>
+  group_by(ID) |>
+  summarise(
+    dva = mean(dva, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Descriptive statistics
+fle_stats <- myOverallJoV_means |>
+  summarise(
+    n = sum(!is.na(dva)),
+    mean = mean(dva, na.rm = TRUE),
+    sd = sd(dva, na.rm = TRUE),
+    variance = var(dva, na.rm = TRUE)
+  )
+
+mean_fle <- fle_stats$mean
+sd_fle   <- fle_stats$sd
+
+legend_title <- paste0(
+  "Participant-level statistics\n",
+  "N = ", fle_stats$n, "\n",
+  "Mean = ", round(mean_fle, 2), " dva\n",
+  "SD = ", round(sd_fle, 2), " dva\n",
+  "Variance = ", round(fle_stats$variance, 2), " dva²"
+)
+
+ggplot(myOverallJoV_means, aes(x = dva)) +  
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    colour = "white",
+    linewidth = 0.4
+  ) +
+
+  # Zero
+  geom_vline(
+    aes(xintercept = 0, linetype = "Zero"),
+    colour = "red",
+    linewidth = 1
+  ) +
+
+  # Mean
+  geom_vline(
+    aes(xintercept = mean_fle, linetype = "Mean"),
+    colour = "darkgreen",
+    linewidth = 1
+  ) +
+
+  # Mean ± 1 SD
+  geom_vline(
+    aes(
+      xintercept = mean_fle - sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    aes(
+      xintercept = mean_fle + sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+
+  scale_linetype_manual(
+    name = legend_title,
+    values = c(
+      "Zero" = "solid",
+      "Mean" = "dashed",
+      "Mean ± 1 SD" = "dotted"
+    )
+  ) +
+
+  labs(
+    title = "Distribution of participant-level flash-lag effects",
+    x = "Mean FLE magnitude (dva)",
+    y = "Number of participants"
+  ) +
+
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(face = "plain"),
+    plot.title = element_text(face = "bold")
+  )
 ```
 
-#### FLE (dva) by Participant
+temporal units
+
+```{r}
+rotation_speed_deg_s <- 180
+trajectory_radius_dva <- 12.15
+
+myOverallJoV <- myOverallJoV |>
+  mutate(
+    # Convert arc length to polar-angle displacement
+    FLE_polar_rad = dva / trajectory_radius_dva,
+    FLE_polar_deg = FLE_polar_rad * 180 / pi,
+
+    # Convert polar displacement to temporal displacement
+    FLE_ms = (FLE_polar_deg / rotation_speed_deg_s) * 1000
+  )
+
+myOverallJoV <- myOverallJoV |>
+  mutate(
+    FLE_ms = dva * 1000 /
+      (trajectory_radius_dva * pi)
+  )
+
+myOverallJoV_means <- myOverallJoV |>
+  group_by(ID) |>
+  summarise(
+    dva = mean(dva, na.rm = TRUE),
+    FLE_ms = mean(FLE_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+# Calculate one mean FLE magnitude per participant
+myOverallJoV_means <- myOverallJoV |>
+  group_by(ID) |>
+  summarise(
+    FLE_ms = mean(FLE_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Descriptive statistics
+fle_stats <- myOverallJoV_means |>
+  summarise(
+    n = sum(!is.na(FLE_ms)),
+    mean = mean(FLE_ms, na.rm = TRUE),
+    sd = sd(FLE_ms, na.rm = TRUE),
+    variance = var(FLE_ms, na.rm = TRUE)
+  )
+
+mean_fle <- fle_stats$mean
+sd_fle   <- fle_stats$sd
+
+legend_title <- paste0(
+  "Participant-level statistics\n",
+  "N = ", fle_stats$n, "\n",
+  "Mean = ", round(mean_fle, 2), " ms\n",
+  "SD = ", round(sd_fle, 2), " ms\n",
+  "Variance = ", round(fle_stats$variance, 2), " ms²"
+)
+
+ggplot(myOverallJoV_means, aes(x = FLE_ms)) +  
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    colour = "white",
+    linewidth = 0.4
+  ) +
+
+  # Zero
+  geom_vline(
+    aes(xintercept = 0, linetype = "Zero"),
+    colour = "red",
+    linewidth = 1
+  ) +
+
+  # Mean
+  geom_vline(
+    aes(xintercept = mean_fle, linetype = "Mean"),
+    colour = "darkgreen",
+    linewidth = 1
+  ) +
+
+  # Mean ± 1 SD
+  geom_vline(
+    aes(
+      xintercept = mean_fle - sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    aes(
+      xintercept = mean_fle + sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+
+  scale_linetype_manual(
+    name = legend_title,
+    values = c(
+      "Zero" = "solid",
+      "Mean" = "dashed",
+      "Mean ± 1 SD" = "dotted"
+    )
+  ) +
+
+  labs(
+    title = "Distribution of participant-level flash-lag effects",
+    x = "Mean FLE magnitude (ms)",
+    y = "Number of participants"
+  ) +
+
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(face = "plain"),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+#### FLE (dva) by Participant (Sessions)
 
 ```{r}
 myOverallJoV |>
@@ -556,9 +774,229 @@ str(all_staircase_FLEs)
 
 :::
 
-### Visualising Data
+---
+
+### Data Visualisations
 
 ::: panel-tabset 
+
+#### Dataset (Staircases)
+
+```{r}
+# Calculate one mean FLE magnitude per participant
+all_staircase_FLEs_means <- all_staircase_FLEs |>
+  group_by(ID) |>
+  summarise(
+    FLE_dva = mean(FLE_dva, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Descriptive statistics
+fle_stats <- all_staircase_FLEs_means |>
+  summarise(
+    n = sum(!is.na(FLE_dva)),
+    mean = mean(FLE_dva, na.rm = TRUE),
+    sd = sd(FLE_dva, na.rm = TRUE),
+    variance = var(FLE_dva, na.rm = TRUE)
+  )
+
+mean_fle <- fle_stats$mean
+sd_fle   <- fle_stats$sd
+
+legend_title <- paste0(
+  "Participant-level statistics\n",
+  "N = ", fle_stats$n, "\n",
+  "Mean = ", round(mean_fle, 2), " dva\n",
+  "SD = ", round(sd_fle, 2), " dva\n",
+  "Variance = ", round(fle_stats$variance, 2), " dva²"
+)
+
+ggplot(all_staircase_FLEs_means, aes(x = FLE_dva)) +  
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    colour = "white",
+    linewidth = 0.4
+  ) +
+
+  # Zero
+  geom_vline(
+    aes(xintercept = 0, linetype = "Zero"),
+    colour = "red",
+    linewidth = 1
+  ) +
+
+  # Mean
+  geom_vline(
+    aes(xintercept = mean_fle, linetype = "Mean"),
+    colour = "darkgreen",
+    linewidth = 1
+  ) +
+
+  # Mean ± 1 SD
+  geom_vline(
+    aes(
+      xintercept = mean_fle - sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    aes(
+      xintercept = mean_fle + sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+
+  scale_linetype_manual(
+    name = legend_title,
+    values = c(
+      "Zero" = "solid",
+      "Mean" = "dashed",
+      "Mean ± 1 SD" = "dotted"
+    )
+  ) +
+
+  labs(
+    title = "Distribution of participant-level flash-lag effects",
+    x = "Mean FLE magnitude (dva)",
+    y = "Number of participants"
+  ) +
+
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(face = "plain"),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+temporal units
+
+```{r}
+rotation_speed_deg_s <- 180
+trajectory_radius_dva <- 12.15
+
+all_staircase_FLEs <- all_staircase_FLEs |>
+  mutate(
+    # Convert arc length to polar-angle displacement
+    FLE_polar_rad = FLE_dva / trajectory_radius_dva,
+    FLE_polar_deg = FLE_polar_rad * 180 / pi,
+
+    # Convert polar displacement to temporal displacement
+    FLE_ms = (FLE_polar_deg / rotation_speed_deg_s) * 1000
+  )
+
+all_staircase_FLEs <- all_staircase_FLEs |>
+  mutate(
+    FLE_ms = FLE_dva * 1000 /
+      (trajectory_radius_dva * pi)
+  )
+
+all_staircase_FLEs_means <- all_staircase_FLEs |>
+  group_by(ID) |>
+  summarise(
+    FLE_dva = mean(FLE_dva, na.rm = TRUE),
+    FLE_ms = mean(FLE_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r}
+# Calculate one mean FLE magnitude per participant
+all_staircase_FLEs_means <- all_staircase_FLEs |>
+  group_by(ID) |>
+  summarise(
+    FLE_ms = mean(FLE_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Descriptive statistics
+fle_stats <- all_staircase_FLEs_means |>
+  summarise(
+    n = sum(!is.na(FLE_ms)),
+    mean = mean(FLE_ms, na.rm = TRUE),
+    sd = sd(FLE_ms, na.rm = TRUE),
+    variance = var(FLE_ms, na.rm = TRUE)
+  )
+
+mean_fle <- fle_stats$mean
+sd_fle   <- fle_stats$sd
+
+legend_title <- paste0(
+  "Participant-level statistics\n",
+  "N = ", fle_stats$n, "\n",
+  "Mean = ", round(mean_fle, 2), " ms\n",
+  "SD = ", round(sd_fle, 2), " ms\n",
+  "Variance = ", round(fle_stats$variance, 2), " ms²"
+)
+
+ggplot(all_staircase_FLEs_means, aes(x = FLE_ms)) +  
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    colour = "white",
+    linewidth = 0.4
+  ) +
+
+  # Zero
+  geom_vline(
+    aes(xintercept = 0, linetype = "Zero"),
+    colour = "red",
+    linewidth = 1
+  ) +
+
+  # Mean
+  geom_vline(
+    aes(xintercept = mean_fle, linetype = "Mean"),
+    colour = "darkgreen",
+    linewidth = 1
+  ) +
+
+  # Mean ± 1 SD
+  geom_vline(
+    aes(
+      xintercept = mean_fle - sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+  geom_vline(
+    aes(
+      xintercept = mean_fle + sd_fle,
+      linetype = "Mean ± 1 SD"
+    ),
+    colour = "black",
+    linewidth = 0.8
+  ) +
+
+  scale_linetype_manual(
+    name = legend_title,
+    values = c(
+      "Zero" = "solid",
+      "Mean" = "dashed",
+      "Mean ± 1 SD" = "dotted"
+    )
+  ) +
+
+  labs(
+    title = "Distribution of participant-level flash-lag effects",
+    x = "Mean FLE magnitude (ms)",
+    y = "Number of participants"
+  ) +
+
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(face = "plain"),
+    plot.title = element_text(face = "bold")
+  )
+```
+
 
 #### FLE (dva) by participant
 ```{r}
@@ -639,85 +1077,7 @@ p
 # )
 ```
 
-
 :::
-
----
-
-## Cottier et al. 2025 
-
-Cottier, T., Turner, W., Chae, V. J., Holcombe, A. O., & Hogendoorn, H. (2025). No Evidence That Resting-State Individual Alpha Frequency Represents a Mechanism Underlying Motion-Position Illusions. European Journal of Neuroscience, 62(9), e70250. https://doi.org/10.1111/ejn.70250
-
-
-### Data preparation and derivation of the flash–lag effect (FLE)
-
-#### Data cleaning and preprocessing
-
-Raw trial-level data were imported from PsychoPy output files and subjected to a series of preprocessing steps prior to analysis. Practice trials (identified via the `Prac` variable) were removed to ensure that only data collected under stable task performance contributed to the final estimates. Trials from incomplete or non-experimental staircase conditions (e.g., non-standard staircase identifiers) were excluded to retain only the four adaptive staircases corresponding to clockwise (CW) and counterclockwise (CCW) motion conditions.
-
-Each participant completed four interleaved adaptive staircases per session: two for CW motion (flash initially ahead vs. behind the moving target) and two for CCW motion. Each staircase contained 40 trials, with the final portion of each staircase reflecting convergence toward a participant-specific point of subjective equality (PSE). Following the original analysis pipeline, the last 21 trials of each staircase were extracted and averaged to estimate the terminal PSE for that staircase. This approach prioritises asymptotic performance while minimising the influence of early staircase fluctuations during initial convergence.
-
----
-
-#### Derivation of staircase-level and direction-level PSEs
-
-For each staircase, the PSE was computed as the mean flash offset (in degrees of polar angle) across the final 21 trials of that staircase.
-
-This yields four staircase-specific estimates:
-
-* ST1 and ST2 (clockwise motion conditions)
-* ST3 and ST4 (counterclockwise motion conditions)
-
-To obtain a motion-direction-specific estimate of perceived mislocalisation, staircase PSEs were averaged within motion direction:
-
-- CW_PSE = mean(ST1, ST2)
-- CCW_PSE = mean(ST3, ST4)
-
-**The final flash–lag effect (FLE) was then calculated as a CONTRAST between these directional biases:**
-
-$$
-FLE = \frac{CW - CCW}{2}
-$$
-
-This formulation expresses the illusion magnitude as half the difference between perceived spatial offsets in opposite motion directions, ensuring symmetry around zero and yielding a signed estimate of perceptual displacement attributable to motion.
-
-Finally, PSE estimates in DVA were converted into linear visual space (dva) using a trigonometric transformation based on monitor geometry and viewing distance, rather than a simple arc-length approximation. This conversion accounts for the non-linear relationship between physical displacement on the display and perceived visual angle.
-
----
-
-#### Is “FLE per staircase” a valid primary metric?
-
-A potential alternative approach is to compute an “FLE per staircase” and increase the number of repeated-measures per participant. However, I'm not sure if this is theoretically appropriate.
-
-Each staircase estimates a *unidirectional perceptual threshold* (a PSE under a specific motion direction and initial offset condition), rather than a complete illusion magnitude. The FLE is defined as a *contrast between motion directions*, not a property of any single staircase. Formally, the FLE requires comparison between CW and CCW perceptual biases.
-
-> Basically, a single staircase does not contain both components of this comparison and therefore cannot independently define an FLE.
-
-So staircase-level values cannot be directly interpretable effect sizes.
-
----
-
-#### "Leave-one-staircase-out" FLE estimates?
-
-I thought that a way we could get 4 FLE estimates per session would be to compute FLE as a leave-one-out (LOO) approach, where we leave 1 staircase out of each contrast. 
-
-In this method, the FLE is recomputed multiple times, each time excluding one staircase (e.g., ST1, ST2, ST3, or ST4). Then we can get a set of influence estimates that reflect how much each staircase contributes to the final FLE.
-
-However, this approach is probably more useful as a **robustness or influence diagnostic** than as a primary measure of FLE. It will only help us identify whether any single staircase disproportionately drives the estimated effect (which isn't our goal).
-
-##### More issues with this approach
-
-1. If we compute 4 FLE estimates per participant with a LOO method, then these cannot be treated as independent observations unlike session 1 vs session 2 (which are actually independent).
-
-2. Will also lower the reliability of each FLE estimate if we go with LOO method.
-
-In summary, I can only use LOO if I care about conducting a sensitivity analysis but not to restructure data and increase number of repeated-measures.
-
----
-
-#### Summary
-
-In summary, the primary dependent measure in this study is the flash–lag effect derived from direction-level PSE contrasts. Staircase-level estimates serve as intermediate computational steps rather than standalone effect sizes. While alternative analyses such as LOO procedures can provide insight into estimation stability, they do not constitute independent observations and should not be treated as such in statistical analyses.
 
 
 ---
@@ -751,19 +1111,124 @@ $n=85$ participants; $n=2$ sessions per participant.
 
 ### FLE Histogram
 ```{r, message=FALSE}
+# model
+FLE_hierarchical <- lmer(
+  FLE_dva ~ session +
+    (1 | ID) +
+    (1 | ID:session),
+  data = all_staircase_FLEs
+)
 
+# descrip stats
+fle_mean <- mean(all_staircase_FLEs$FLE_dva, na.rm = TRUE)
+fle_sd   <- sd(all_staircase_FLEs$FLE_dva, na.rm = TRUE)
+
+# fitted values and residuals
+FLE_diagnostics <- data.frame(
+  fitted = fitted(FLE_hierarchical),
+  residual = resid(FLE_hierarchical, type = "pearson")
+)
+
+FLE_histogram <- ggplot(
+  all_staircase_FLEs,
+  aes(x = FLE_dva)
+) +
+  geom_histogram(
+    bins = 30,
+    fill = "steelblue",
+    colour = "white"
+  ) +
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 1
+  ) +
+  geom_vline(
+    xintercept = fle_mean,
+    colour = "darkgreen",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_vline(
+    xintercept = c(fle_mean - fle_sd, fle_mean + fle_sd),
+    colour = "black",
+    linetype = "dotted",
+    linewidth = 0.9
+  ) +
+  labs(
+    title = "Distribution of FLE magnitudes",
+    subtitle = paste0(
+      "N = ", nrow(all_staircase_FLEs),
+      "; participants = ", n_distinct(all_staircase_FLEs$ID),
+      "; M = ", round(fle_mean, 2),
+      "; SD = ", round(fle_sd, 2),
+      "; variance = ", round(fle_sd^2, 2)
+    ),
+    x = "FLE magnitude (dva)",
+    y = "Frequency"
+  ) +
+  theme_classic(base_size = 13)
+
+FLE_histogram
 ```
 
 ### Q-Q Plot
 ```{r, message=FALSE}
 
+FLE_qqplot <- ggplot(
+  FLE_diagnostics,
+  aes(sample = residual)
+) +
+  stat_qq(
+    colour = "steelblue",
+    alpha = 0.7
+  ) +
+  stat_qq_line(
+    colour = "red",
+    linewidth = 1
+  ) +
+  labs(
+    title = "Normal Q–Q plot of model residuals",
+    x = "Theoretical quantiles",
+    y = "Observed residual quantiles"
+  ) +
+  theme_classic(base_size = 13)
+
+FLE_qqplot
 
 ```
 
 ### Residual Plot
 ```{r, message=FALSE}
+FLE_residual_plot <- ggplot(
+  FLE_diagnostics,
+  aes(x = fitted, y = residual)
+) +
+  geom_point(
+    colour = "steelblue",
+    alpha = 0.5
+  ) +
+  geom_hline(
+    yintercept = 0,
+    colour = "red",
+    linetype = "dashed",
+    linewidth = 0.9
+  ) +
+  geom_smooth(
+    method = "loess",
+    formula = y ~ x,
+    se = FALSE,
+    colour = "black",
+    linewidth = 0.9
+  ) +
+  labs(
+    title = "Residuals versus fitted values",
+    x = "Fitted FLE magnitude (dva)",
+    y = "Pearson residual"
+  ) +
+  theme_classic(base_size = 13)
 
-
+FLE_residual_plot
 ```
 
 :::
@@ -780,224 +1245,176 @@ Allow inference about the probability of negative effects, not just mean differe
 ::: panel-tabset
 
 ### Core Model
-$FLE_ij = \beta_0 + \mu_0i + \epsilon_ij$
+
+$FLE_{ijk} = \beta_0 + \mu_0i + \epsilon_{ijk}$
+
 Where:
+
 - $i=$ participant
 - $j=$ session (1 or 2)
+- $k=$ staircase (1-4, 4 per session)
 - $\mu_0i=$ participant-specific mean deviation
-- $\epsilon_ij=$ between-session noise
+- $\epsilon_{ijk}=$ within-participant noise
+
+Model assumes:
+- $\mu_0i \sim \mathcal{N}(0, \sigma^2_{participant})$
+- $\epsilon_{ijk} \sim \mathcal{N}(0, \sigma^2_{residual})$
+
+Session and staircase not explicitly inclded, so only 2 sources of variance in this model:
+$\sigma^2_{total}=\sigma^2_{participant}+\sigma^2_{residual}$
 
 ```{r}
 # core lmm
 FLE_corelmm <- lmer(FLE_dva ~ 1 + (1 | ID), data = all_staircase_FLEs)
-summary(FLE_corelmm)
+# overall mean FLE and confidence interval
+model_parameters(FLE_corelmm)
+
+# variance components and ICC
+icc(FLE_corelmm)
 ```
-
-Core LMM gives:
-- Between-participant variance (true individual differences)
-- Within-participant variance (test–retest noise)
-- Shrunk participant estimates (best linear unbiased predictors)
-
-Limitations of LMM:
-- Doesn't tell us who is negative reliably
-- Sign of FLE (positive/negative) measured indirectly (BLUPs)
-
-:::
 
 ### Primary Model
 
-Random intercept + session effect
+$FLE_{ijk} = \beta_0 + \beta_1Session_j+ \mu_0i + \epsilon_{ijk}$
+
+Same as core model, except now we include $Session$, where $\beta1$ is the population-average difference between Session2 and Session 1.
+
 ```{r}
-# adding session (random intercept + session fixed effect)
-FLE_lmm <- lmer(FLE_dva ~ session + (1 | ID), data = all_staircase_FLEs)
-summary(FLE_lmm)
+# Participant random intercept with session as a fixed effect
+FLE_lmm <- lmer(
+  FLE_dva ~ session + (1 | ID),
+  data = all_staircase_FLEs
+)
+model_parameters(FLE_lmm)
 ```
 
-What this LMM gives:
-- Tests whether FLE shifts systematically from session 1 → 2
-- Improves reliability assessment
-- Controls for practice effects
+**Findings:**
 
-:::
+- Actually found significant effect of session, such that session 1 FLE magnitude was on average 1.65 dva greater than session 2.
+
+- The between-participant SD was 1.91 dva. This indicates substantial stable differences in FLE magnitude between participants after controlling for the average session effect.
+
 
 ### Random Slopes Model
 
-Key model for testing reliable qualitative individual differences.
+Key model:
+$FLE_{ijk} = \beta_0 + \beta_1 Session_j + \mu_i + v_{ij} + \epsilon_{ijk}$
 
-$FLE_ij = \beta_0 + \beta_1 Session_j + \mu_0i + \mu_1i Session_j + \epsilon_ij$
+Also same as primary model, but with some additions:
 
-> doesn't work, i don't have enough observations
+- $v_{ij}=$ session-specific deviation for session $j$ within participant $i$
+- $v_{ij} \sim \mathcal{N}(0, \sigma^2_{session})$
+
+Variance is partitioned as such:
+
+$\sigma^2_{total}=\sigma^2_{participant}+\sigma^2_{session}+\sigma^2_{residual}$
 
 ```{r}
-#doesn't work fsr
-FLE_randomslopes <- lmer(FLE_dva ~ staircase + (staircase | ID), data = all_staircase_FLEs)
-summary(FLE_randomslopes)
+# works only with staircase data (8 repeated-measures)
+FLE_hierarchical <- lmer(
+  FLE_dva ~ session +
+    (1 | ID) +
+    (1 | ID:session),
+  data = all_staircase_FLEs
+)
+
+model_parameters(FLE_hierarchical)
+icc(FLE_hierarchical)
+performance(FLE_hierarchical)
 ```
 
-What this model says:
-- Do individuals differ in mean FLE? → $\mu_0i$
-- Do individuals differ in stability across sessions? → $\mu_1i$
+Interpetation:
+
+- FLE magnitude decreased from Session 1 to Session 2 on average by 0.5 dva.
+- Participant-level (aka individual differences) SD was *1.89 dva*.
+- Session-level SD was *0.44 dva*.
+- Staircase-level SD was *1.73 dva*.
+- Approximately *52.9%* of the total variance was attributable to stable participant differences (aka individual differences).
+
+**Model performance**
+
+- Marginal $R^2=.009$
+- Conditional $R^2=.562$
+- RMSE $=1.61$dva
+
+Note to self: calculate AIC and BIC
 
 :::
+
 
 ---
 
-## Modelling "Directional Reversal"
+# Bayesian Model
 
-### Prior belief that negative FLE people are *truly negative*
+**Plain english:**
 
-1) Extract participant-level posterior estimates
+- Each observed FLE is a noisy measurement of a participant's true FLE
 
-2) Classify probability of negative FLE
+- Participants have different true FLE values
 
-Mean & SE participant FLE
-Probability estimate assuming normality
-> Chance that a given participant is truly negative
+- Those true FLE values come from a population distribution
 
-3) 
-
-### Prior belief that negative FLE people are *NOT truly negative*
-
-
-
-
-
-## Hierarchical bootstrap
-
-Procedure:
-- resample participants
-- resample sessions within participants
-- recompute FLE each time
-- compute distribution of participant-level means
-
-You then estimate proportion of bootstrap samples where *FLE < 0*
-
-This gives:
-- stability of negative group
-- robustness to outliers
-- distribution-free inference
-
-
-## Discussion
-
-
-Problem is that there are only 2 repeated measures per participant, so we have limited power to detect stable negative FLE in the data (although the experiment itself is relatively robust so we can be more confident in the 2 estimates we have per participant).
+- We want to estimate how much of that population lies below zero (i.e. proportion of true negative FLE)
 
 ---
 
-# July 2026 Updates
+While the model gives an estimate proportion of "negative FLE" people, we still don't know if this proportion is actually greater than 0.
 
-## Hierarchical Model using staircase data
+To test whether this proportion is *credibly greater than 0*, we will fit a Bayesian hierarchical model.
 
-(Cottier et al. 2023)
+Following the standard hierarchical model structure for individual differences, we define the following model:
 
-::: panel-tabset
+$$
+\begin{aligned}
+y_{ij} & \sim \mathcal{N}(\theta_i, \sigma_\epsilon) \\
+\theta_i & \sim \mathcal{N}(\mu_\theta, \sigma_\theta) \\ \\
+\mu_\theta & \sim \log \mathcal{N}(a_\mu, b_\mu) \\ \\
+\sigma_\theta & = -\mu_\theta / \Phi^{-1}(0.5 \; p(\theta_i<0)) \\
+p(\theta_i<0) & = \Phi(p^{*}_{\theta_i<0}) \\
+p^{*}(\theta_i<0) & \sim \mathcal{N}(a_p, b_p) \\ \\
+\sigma_\epsilon^2 & \propto 1/\sigma_\epsilon^2
+\end{aligned}
+$$
 
-### Data wrangling
+**Model:**
 
-```{r}
-# ID as categorical
-all_staircase_FLEs <- all_staircase_FLEs |>
-  dplyr::mutate(
-    ID = factor(ID),
-    staircase = factor(staircase)
-  )
-```
+- $y_ij$ is the observed FLE for participant $i$ in session $j$.
+
+- $\theta_i$ is participant $i$'s underlying FLE (inferred from their 2 sessions)
+
+- $\sigma_\epsilon$ is the *within-participant* error (e.g. test-retest, measurement error)
+
+- $\mu_\theta$ is the *average FLE* in population. So if $\mu_\theta>0$, then the average person has a positive FLE.
+
+- $\sigma_\theta$ is how much true FLE differs between participants (i.e. true individual differences). This is the population-level spread of true participant effects (assumption of normal distribution).
+
+  * Small $\sigma_\theta$ --> people are similar
+  
+  * Large $\sigma_\theta$ --> people vary a lot
+  
+  * Significantly large $\sigma_\theta$ --> negative FLE indivduals are plausible
+
+---
+
+We parameterize the individual differences standard deviation $\sigma_\theta$ in terms of the proportion of individuals that show a negative FLE (i.e., a flash *lead* effect, $p(\theta_i<0)$) to directly estimate this quantity of interest.
+
+**What this does:**
+
+- $p(\theta_i<0)$ (proportion of negative FLE) becomes the parameter of interest.
+
+- Instead of estimating variance from the data to derive proportion, we estimate proportion to derive variance.
 
 
-:::
+We also place a log-normal prior on the *group mean* $\mu_\theta$ to ensure positive values (but we could replace this by something more flexible).
 
-### Model
+> This prior means that we assume the average FLE is positive.
 
-```{r}
-# estimate overall mean, between-participant variance, within-participant variance
-fle_lmer <- lmer(
-  FLE_dva ~ 1 + (1 | ID),
-  data = all_staircase_FLEs,
-  REML = TRUE
-)
 
-summary(fle_lmer)
+**Probit for Sampling Efficiency:**
+To improve sampling efficiency, we place a normal prior on the probit-transformed quantity $p^{*}(\theta_i<0)$.
 
-# pop mean
-fixef(fle_lmer)
+> Probit model is a type of regression used to model a binary outcome. Probabilities (0-1) are hard to sample directly, but -infinity to infinity is easier. So, we sample in probit space and transform back to probability.
 
-# participant-level SD
-participant_sd <- attr(
-  VarCorr(fle_lmer)$ID,
-  "stddev"
-)
-participant_sd
+Finally, we place a non-informative prior on the error variance $\sigma_\epsilon^2$.
 
-# within-participant SD
-staircase_sd <- sigma(fle_lmer)
-staircase_sd
-```
-
-```{r}
-model_estimates <- data.frame(
-  parameter = c(
-    "Population mean FLE",
-    "Between-participant SD",
-    "Within-participant staircase SD"
-  ),
-  estimate = c(
-    fixef(fle_lmer)[["(Intercept)"]],
-    participant_sd,
-    staircase_sd
-  )
-)
-
-model_estimates
-```
-
-:::
-
-### Intraclass correlation
-
-```{r}
-participant_variance <- as.numeric(
-  VarCorr(fle_lmer)$ID[1]
-)
-
-staircase_variance <- sigma(fle_lmer)^2
-
-icc <- participant_variance /
-  (participant_variance + staircase_variance)
-
-icc
-
-# use library
-library(performance)
-icc(fle_lmer)
-```
-
-Interpretation:
-- ICC near 0: most variation occurs between staircases within the same person.
-- ICC near 1: staircase estimates are highly consistent within participants, and most variation reflects between-participant differences.
-
-ICC was found to be `0.53511`, which suggests that the variation between and within participants is very similar.
-
-:::
-
-### Participant-level FLE
-
-```{r}
-# alternatively
-participant_fle <- tibble::tibble(
-  ID = rownames(ranef(fle_lmer)$ID),
-  random_effect = ranef(fle_lmer)$ID[["(Intercept)"]],
-  estimated_fle =
-    fixef(fle_lmer)[["(Intercept)"]] +
-    random_effect
-)
-
-participant_fle
-
-# negative FLE
-participant_fle |>
-  dplyr::filter(estimated_fle < 0)
-```
-
-:::
-
+---
