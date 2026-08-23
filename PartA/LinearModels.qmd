@@ -1,0 +1,1003 @@
+---
+title: "DataCleaning"
+date: today
+author: "Imane Lattab"
+institute: "The University of Sydney"
+repository: https://github.com/imanel04/PsychHonours.git
+format: 
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+    theme: sandstone
+    fig_caption: yes
+    table-of-contents: true
+    toc: true
+    toc_depth: 4
+    toc_float: true
+execute:
+  echo: true
+  tidy: true
+number-sections: false 
+---
+
+```{r setup, include=FALSE}
+# LIBRARIES
+library(R.matlab)
+library(quid)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(ggExtra)
+library(patchwork)
+
+# from previous HM report i worked on
+library(viridis)
+library(plotly)
+library(DT)
+library(lme4)
+library(lmerTest) 
+library(ez)
+library(broom.mixed)
+
+# MIXED MODELS
+library(lme4) # mle
+library(lmerTest)
+
+# BAYESIAN
+library(rstan)
+library(tidybayes)
+library(logspline) # density estimation
+library(bridgesampling) # bayes factors
+library(brms)
+
+# for downloading OSF repos
+library(osfr)
+```
+
+## Cottier et al. 2023 FLE
+
+https://doi.org/10.1167/jov.23.10.8
+
+### Load in Data
+```{r}
+# # read in data
+# FLE <- readMat("../../Cottier2023_OSF/Data/Effect files/FLE_Values.mat") # https://osf.io/s4aqg/overview
+# 
+# # data wrangling
+# overallOfBothSessions<- FLE$FLE.Overall
+# overallOfBothSessions<- as_tibble(overallOfBothSessions)
+# 
+# sess1JoV <-  as_tibble(FLE$FLE.Sess1) # n=85
+# sess2JoV <-  as_tibble(FLE$FLE.Sess2) # n = 85
+# 
+# sess1JoV <- sess1JoV |>
+#   rename(
+#     ID     = V1,
+#     pixels = V2,
+#     dva    = V3
+#   )
+# 
+# sess2JoV <- sess2JoV |>
+#   rename(
+#     ID     = V1,
+#     pixels = V2,
+#     dva    = V3
+#   )
+# 
+# sess1JoV$session <- 1
+# sess2JoV$session <- 2
+# 
+# myOverallJoV <- rbind(sess1JoV, sess2JoV)
+# 
+# # check for na and duplicates (none)
+# anyNA(myOverallJoV)
+# any(duplicated(sess1JoV$ID))
+# any(duplicated(sess2JoV$ID))
+# 
+# # save as csv for future
+# write_csv(myOverallJoV, "Cottier2023_2Sessions.csv")
+
+# 2 sessions (2 repeated measures)
+myOverallJoV <- read.csv("/Users/imanelattab/Desktop/Cottier2023/Cottier2023_2Sessions.csv") # check zip folder (Cottier2023) for file!
+
+# WE WILL BE USING THE 8 STAIRCASE DATA
+
+# 8 staircases (8 repeated measures)
+all_staircase_FLEs <- read.csv("/Users/imanelattab/Desktop/Cottier2023/FLE_Raw/all_participants_staircase_FLEs.csv")
+```
+
+
+### Data Visualisations
+
+The data analyses that is available on the OSF of the original paper had used sessions as the repeated measure. For the initial presentation of this dataset, we will keep the data in the original format. Later, we will be using staircases as the repeated measure (4 per session, 8 per participant).
+
+::: panel-tabset
+
+#### Dataset
+
+```{r}
+datatable(myOverallJoV, 
+          options = list(
+            pageLength = 10,
+            scrollX = TRUE),
+          caption = "Cottier et al. (2023) 2 Sessions")
+```
+
+#### FLE (dva) by Participant
+
+```{r}
+myOverallJoV |>
+  group_by(ID) |>
+  summarise(
+    mean_FLE = mean(dva, na.rm = TRUE),
+    sd_FLE = sd(dva, na.rm = TRUE)
+  ) |>
+  ggplot(aes(x = reorder(ID, mean_FLE), y = mean_FLE)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_FLE - sd_FLE, ymax = mean_FLE + sd_FLE), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Mean ± SD of FLE per Individual",
+    x = "Individual",
+    y = "DVA"
+  ) +
+  theme_minimal()
+
+
+```
+
+#### Visualising the 'Negative' FLE
+
+Here, we will use the session data just because we want to have a factor with 3 levels; 
+
+- Negative in 1 session
+- Negative in both sessions
+- Poitive in both sessions
+
+```{r, include=FALSE}
+# make it wide for plots
+wide <- myOverallJoV |>
+  select(ID, dva, session) |>
+  pivot_wider(
+    names_from = session,
+    values_from = dva,
+    names_prefix = "dva_"
+  )
+
+# create new categorical variable for negative FLE (neither session, 1 session, both sessions)
+neg_dva <- wide |>
+  mutate(
+    neg_s1 = dva_1 < 0,
+    neg_s2 = dva_2 < 0,
+    neg_count = neg_s1 + neg_s2,
+    neg_group = case_when(
+      neg_s1 & neg_s2 ~ "Negative in both",
+      neg_s1 | neg_s2 ~ "Negative in one",
+      TRUE            ~ "Not negative"
+    )
+  ) |>
+  filter(neg_count > 0) |>
+  mutate(
+    neg_group = case_when(
+      neg_count == 1 ~ 1,
+      neg_count == 2 ~ 2
+    )
+  ) |>
+  select(ID, dva_1, dva_2, neg_group)
+
+# separate to myOverallJov, where this has the negative FLE variables
+long <- wide |>
+  mutate(
+    neg_s1 = dva_1 < 0,
+    neg_s2 = dva_2 < 0,
+    neg_group = case_when(
+      neg_s1 & neg_s2 ~ "Negative in both",
+      neg_s1 | neg_s2 ~ "Negative in one",
+      TRUE            ~ "Not negative"
+    )
+  ) |>
+  pivot_longer(
+    cols = c(dva_1, dva_2),
+    names_to = "session",
+    values_to = "dva"
+  ) |>
+  mutate(
+    session = factor(session,
+                     levels = c("dva_1", "dva_2"),
+                     labels = c("Session 1", "Session 2"))
+  )
+```
+
+```{r}
+ggplot(wide, aes(x = dva_1, y = dva_2)) +
+  geom_point(color = "grey70", size = 2.5) +
+  geom_point(
+    data = neg_dva,
+    aes(x = dva_1, y = dva_2, color = factor(neg_group)),
+    size = 3
+  ) +
+  scale_color_manual(
+    values = c("1" = "#FDAE61", "2" = "#D7191C"),
+    labels = c("One session negative", "Both sessions negative"),
+    name = "Negative DVA"
+  ) +
+  geom_abline(slope = 1, intercept = 0, color = "black", linetype = "solid") +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  coord_equal() +
+  theme_minimal()
+```
+
+
+```{r}
+neg_dva |>
+  arrange(desc(neg_group)) |>
+  kable(
+    col.names = c("Participant ID", "Session 1 (dva)", "Session 2 (dva)", "Negative Sessions"),
+    caption = "Participants with Negative FLE Values"
+  ) |>
+  kable_styling(full_width = FALSE)
+```
+
+```{r}
+ggplot(long, aes(x = session, y = dva, group = ID, color = neg_group)) +
+  
+  # connecting lines
+  geom_line(alpha = 0.5, linewidth = 0.8) +
+  
+  # points
+  geom_point(size = 2.5, alpha = 0.8) +
+  
+  # zero reference line
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black",
+    linewidth = 0.8
+  ) +
+  
+  scale_color_manual(
+    values = c(
+      "Not negative"    = "#2C7FB8",
+      "Negative in one" = "#FDAE61",
+      "Negative in both"= "#D7191C"
+    ),
+    name = "Negative DVA"
+  ) +
+  
+  labs(
+    title = "FLE Across Sessions by Participant",
+    subtitle = "Lines connect repeated measures; colour indicates negative FLE pattern",
+    x = "Session",
+    y = "FLE (DVA)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r}
+# curious to see how many people have a "smaller/more negative" FLE in session 2
+long_dir <- wide |>
+  mutate(
+    change = case_when(
+      dva_2 > dva_1 ~ "Increase",
+      dva_2 < dva_1 ~ "Decrease",
+      TRUE          ~ "No change"
+    )
+  ) |>
+  pivot_longer(
+    cols = c(dva_1, dva_2),
+    names_to = "session",
+    values_to = "dva"
+  ) |>
+  mutate(
+    session = factor(session,
+                     levels = c("dva_1", "dva_2"),
+                     labels = c("Session 1", "Session 2"))
+  )
+
+# participants where dva "increased" in session 2
+p_increase <- long_dir |>
+  filter(change == "Increase") |>
+  ggplot(aes(x = session, y = dva, group = ID)) +
+  
+  geom_line(color = "#2C7FB8", alpha = 0.6, linewidth = 0.9) +
+  geom_point(color = "#2C7FB8", size = 2.5, alpha = 0.9) +
+  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  
+  labs(
+    title = "Participants with Increased FLE (Session 2 > Session 1)",
+    x = "Session",
+    y = "FLE (dva)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+# participants where dva "decreased" in session 2
+p_decrease <- long_dir |>
+  filter(change == "Decrease") |>
+  ggplot(aes(x = session, y = dva, group = ID)) +
+  
+  geom_line(color = "#D7191C", alpha = 0.6, linewidth = 0.9) +
+  geom_point(color = "#D7191C", size = 2.5, alpha = 0.9) +
+  
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  
+  labs(
+    title = "Participants with Decreased FLE (Session 2 < Session 1)",
+    x = "Session",
+    y = "FLE (dva)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+```{r}
+# side by side
+ggplot(long_dir |> filter(change != "No change"),
+       aes(x = session, y = dva, group = ID)) +
+  geom_line(alpha = 0.6) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~change) +
+  theme_minimal()
+```
+
+```{r}
+# counts
+change_summary <- wide |>
+  mutate(
+    change = case_when(
+      dva_2 > dva_1 ~ "Increase",
+      dva_2 < dva_1 ~ "Decrease",
+      TRUE          ~ "No change"
+    )
+  ) |>
+  count(change) |>
+  mutate(
+    proportion = n / sum(n),
+    percent = round(proportion * 100, 1)
+  )
+
+kable(change_summary,
+      col.names = c("Change Direction", "Count", "Proportion", "Percent"),
+      caption = "Participant Change in FLE from Session 1 to Session 2")
+```
+
+
+:::
+
+
+### Multiple Staircase
+
+We will go back to the 8 staircase data for analyses since it provides us with more repeated measures.
+
+::: panel-tabset
+
+#### Data Pipeline
+```{r}
+# <--------COMMENTED BECAUSE I'VE RUN IT AND SAVED AS CSV!-------->
+
+# # Folder containing all participant-session CSV files
+# data_folder <- "/Users/imanelattab/Downloads/FLE_Holcombe"
+# 
+# # Number used in the original MATLAB processing:
+# # tail(..., AVOVER + 1) means the final 21 trials
+# AVOVER <- 20
+# n_trials_to_average <- AVOVER + 1
+# 
+# # Convert pixels to degrees of visual angle
+# tc_dva <- function(x, screen_distance = 500) {
+# 
+#   screen_width <- 543.7  # mm
+#   resolution_x <- 1920
+# 
+#   pixel_width <- screen_width / resolution_x
+# 
+#   atan((x * pixel_width) / screen_distance) * 180 / pi
+# }
+# 
+# # Convert displacement in degrees of polar angle to DVA
+# polar_deg_to_dva <- function(x, radius_px = 380) {
+# 
+#   tangential_displacement_px <- x * radius_px * pi / 180
+# 
+#   tc_dva(tangential_displacement_px)
+# }
+# 
+# # Process one participant-session CSV file
+# process_fle_file <- function(file_path) {
+# 
+#   # Extract participant ID and session number from filename
+#   #
+#   # Example:
+#   # DID_FLE_1_2.csv
+#   # Participant ID = 1
+#   # Session = 2
+#   file_info <- str_match(
+#     basename(file_path),
+#     "^DID_FLE_([0-9]+)_([0-9]+)\\.csv$"
+#   )
+# 
+#   participant_id <- as.integer(file_info[, 2])
+#   session_number <- as.integer(file_info[, 3])
+# 
+#   # Stop if the filename does not have the expected format
+#   if (is.na(participant_id) || is.na(session_number)) {
+#     warning("Could not extract ID/session from: ", basename(file_path))
+#     return(NULL)
+#   }
+# 
+#   # Read and clean the data
+#   fle <- read_csv(file_path, show_col_types = FALSE) |>
+#     filter(Prac != "Yes")
+# 
+#   # Function to calculate the PSE for one staircase
+# calculate_staircase_pse <- function(data, stair_number, stair_column) {
+# 
+#   staircase_values <- data |>
+#     filter(StairNum == stair_number) |>
+#     pull({{ stair_column }})
+# 
+#   # Remove missing values from the numeric vector
+#   staircase_values <- staircase_values[!is.na(staircase_values)]
+# 
+#   if (length(staircase_values) == 0) {
+#     warning(
+#       "Participant ", participant_id,
+#       ", session ", session_number,
+#       ", staircase ", stair_number,
+#       " contains no valid observations."
+#     )
+# 
+#     return(NA_real_)
+#   }
+# 
+#   if (length(staircase_values) < n_trials_to_average) {
+#     warning(
+#       "Participant ", participant_id,
+#       ", session ", session_number,
+#       ", staircase ", stair_number,
+#       " has only ", length(staircase_values),
+#       " non-missing trials."
+#     )
+#   }
+# 
+#   mean(
+#     tail(staircase_values, n_trials_to_average),
+#     na.rm = TRUE
+#   )
+# }
+# 
+#   # Raw staircase PSEs
+#   ST1_PSE <- calculate_staircase_pse(fle, 1, Stair1)
+#   ST2_PSE <- calculate_staircase_pse(fle, 2, Stair2)
+#   ST3_PSE <- calculate_staircase_pse(fle, 3, Stair3)
+#   ST4_PSE <- calculate_staircase_pse(fle, 4, Stair4)
+# 
+#   # Return one row per staircase
+#   tibble(
+#     ID = participant_id,
+#     session = session_number,
+#     staircase = 1:4,
+#     direction = c("CW", "CW", "CCW", "CCW"),
+#     PSE_deg = c(
+#       ST1_PSE,
+#       ST2_PSE,
+#       ST3_PSE,
+#       ST4_PSE
+#     )
+#   ) |>
+#     mutate(
+#       # Reverse the sign for counterclockwise staircases so that
+#       # positive values consistently indicate a positive FLE
+#       FLE_deg = if_else(
+#         direction == "CCW",
+#         -PSE_deg,
+#         PSE_deg
+#       ),
+# 
+#       FLE_dva = polar_deg_to_dva(FLE_deg),
+# 
+#       source_file = basename(file_path)
+#     )
+# }
+# 
+# # Find all files matching the expected naming convention
+# fle_files <- list.files(
+#   path = data_folder,
+#   pattern = "^DID_FLE_[0-9]+_[0-9]+\\.csv$",
+#   full.names = TRUE
+# )
+# 
+# # Process every file and combine the results
+# all_staircase_FLEs <- map_dfr(
+#   fle_files,
+#   process_fle_file
+# ) |>
+#   arrange(ID, session, staircase)
+# 
+# # Inspect the resulting dataset
+# print(all_staircase_FLEs)
+# 
+# # Save the combined dataset
+# output_path <- file.path(
+#   data_folder,
+#   "all_participants_staircase_FLEs.csv"
+# )
+# 
+# write_csv(
+#   all_staircase_FLEs,
+#   output_path
+# )
+# 
+# message("Combined dataset saved to: ", output_path)
+
+# already loaded in at the start!
+str(all_staircase_FLEs)
+```
+
+:::
+
+### Visualising Data
+
+::: panel-tabset 
+
+#### FLE (dva) by participant
+```{r}
+#----CHECKING STUF----
+n_distinct(all_staircase_FLEs$ID) # no. of IDs
+
+# 
+all_staircase_FLEs |>
+  group_by(ID) |>
+  summarise(
+    mean_FLE = mean(FLE_dva, na.rm = TRUE),
+    sd_FLE = sd(FLE_dva, na.rm = TRUE)
+  ) |>
+  ggplot(aes(x = reorder(ID, mean_FLE), y = mean_FLE)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean_FLE - sd_FLE, ymax = mean_FLE + sd_FLE), width = 0.2) +
+  coord_flip() +
+  labs(
+    title = "Mean ± SD of FLE per Individual",
+    x = "Individual",
+    y = "DVA"
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal()
+```
+
+:::
+
+#### Visualising negative FLE
+
+```{r}
+# Make the staircase-level data wide for plotting
+wide_staircases <- all_staircase_FLEs |>
+  select(ID, session, staircase, FLE_dva) |>
+  pivot_wider(
+    id_cols = c(ID, staircase),
+    names_from = session,
+    values_from = FLE_dva,
+    names_prefix = "session_"
+  )
+
+p <- ggplot(
+  wide_staircases,
+  aes(x = session_1, y = session_2)
+) +
+  geom_point(
+    color = "grey40",
+    size = 2.5,
+    alpha = 0.7
+  ) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    color = "black",
+    linetype = "solid"
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  coord_equal() +
+  labs(
+    x = "Session 1 FLE (DVA)",
+    y = "Session 2 FLE (DVA)"
+  ) +
+  theme_minimal()
+p
+# ggsave(
+#   "FLE_session_scatter.png",
+#   plot = p,
+#   width = 10,
+#   height = 8,
+#   dpi = 300
+# )
+```
+
+
+:::
+
+---
+
+## Cottier et al. 2025 
+
+Cottier, T., Turner, W., Chae, V. J., Holcombe, A. O., & Hogendoorn, H. (2025). No Evidence That Resting-State Individual Alpha Frequency Represents a Mechanism Underlying Motion-Position Illusions. European Journal of Neuroscience, 62(9), e70250. https://doi.org/10.1111/ejn.70250
+
+
+### Data preparation and derivation of the flash–lag effect (FLE)
+
+#### Data cleaning and preprocessing
+
+Raw trial-level data were imported from PsychoPy output files and subjected to a series of preprocessing steps prior to analysis. Practice trials (identified via the `Prac` variable) were removed to ensure that only data collected under stable task performance contributed to the final estimates. Trials from incomplete or non-experimental staircase conditions (e.g., non-standard staircase identifiers) were excluded to retain only the four adaptive staircases corresponding to clockwise (CW) and counterclockwise (CCW) motion conditions.
+
+Each participant completed four interleaved adaptive staircases per session: two for CW motion (flash initially ahead vs. behind the moving target) and two for CCW motion. Each staircase contained 40 trials, with the final portion of each staircase reflecting convergence toward a participant-specific point of subjective equality (PSE). Following the original analysis pipeline, the last 21 trials of each staircase were extracted and averaged to estimate the terminal PSE for that staircase. This approach prioritises asymptotic performance while minimising the influence of early staircase fluctuations during initial convergence.
+
+---
+
+#### Derivation of staircase-level and direction-level PSEs
+
+For each staircase, the PSE was computed as the mean flash offset (in degrees of polar angle) across the final 21 trials of that staircase.
+
+This yields four staircase-specific estimates:
+
+* ST1 and ST2 (clockwise motion conditions)
+* ST3 and ST4 (counterclockwise motion conditions)
+
+To obtain a motion-direction-specific estimate of perceived mislocalisation, staircase PSEs were averaged within motion direction:
+
+- CW_PSE = mean(ST1, ST2)
+- CCW_PSE = mean(ST3, ST4)
+
+**The final flash–lag effect (FLE) was then calculated as a CONTRAST between these directional biases:**
+
+$$
+FLE = \frac{CW - CCW}{2}
+$$
+
+This formulation expresses the illusion magnitude as half the difference between perceived spatial offsets in opposite motion directions, ensuring symmetry around zero and yielding a signed estimate of perceptual displacement attributable to motion.
+
+Finally, PSE estimates in DVA were converted into linear visual space (dva) using a trigonometric transformation based on monitor geometry and viewing distance, rather than a simple arc-length approximation. This conversion accounts for the non-linear relationship between physical displacement on the display and perceived visual angle.
+
+---
+
+#### Is “FLE per staircase” a valid primary metric?
+
+A potential alternative approach is to compute an “FLE per staircase” and increase the number of repeated-measures per participant. However, I'm not sure if this is theoretically appropriate.
+
+Each staircase estimates a *unidirectional perceptual threshold* (a PSE under a specific motion direction and initial offset condition), rather than a complete illusion magnitude. The FLE is defined as a *contrast between motion directions*, not a property of any single staircase. Formally, the FLE requires comparison between CW and CCW perceptual biases.
+
+> Basically, a single staircase does not contain both components of this comparison and therefore cannot independently define an FLE.
+
+So staircase-level values cannot be directly interpretable effect sizes.
+
+---
+
+#### "Leave-one-staircase-out" FLE estimates?
+
+I thought that a way we could get 4 FLE estimates per session would be to compute FLE as a leave-one-out (LOO) approach, where we leave 1 staircase out of each contrast. 
+
+In this method, the FLE is recomputed multiple times, each time excluding one staircase (e.g., ST1, ST2, ST3, or ST4). Then we can get a set of influence estimates that reflect how much each staircase contributes to the final FLE.
+
+However, this approach is probably more useful as a **robustness or influence diagnostic** than as a primary measure of FLE. It will only help us identify whether any single staircase disproportionately drives the estimated effect (which isn't our goal).
+
+##### More issues with this approach
+
+1. If we compute 4 FLE estimates per participant with a LOO method, then these cannot be treated as independent observations unlike session 1 vs session 2 (which are actually independent).
+
+2. Will also lower the reliability of each FLE estimate if we go with LOO method.
+
+In summary, I can only use LOO if I care about conducting a sensitivity analysis but not to restructure data and increase number of repeated-measures.
+
+---
+
+#### Summary
+
+In summary, the primary dependent measure in this study is the flash–lag effect derived from direction-level PSE contrasts. Staircase-level estimates serve as intermediate computational steps rather than standalone effect sizes. While alternative analyses such as LOO procedures can provide insight into estimation stability, they do not constitute independent observations and should not be treated as such in statistical analyses.
+
+
+---
+
+## Linear Assumptions
+
+To investigate whether each session significantly affects FLE, we fitted a mixed-effects model. In our example, we are looking specifically at the `session` as a *fixed effect* and `ID` as a *random intercept*.
+
+Before commencing with and interpreting the analyses, we need to check if the linear model assumptions are being met:
+
+  1. **Independence of observations**
+
+*Repeated measures*; same participant's FLE measured multiple times under same conditions.
+Individual particiapnts (`ID`) are independent.
+
+  2. **Homoscedasticity**
+
+The residual plot... loess line ...
+
+  3. **Normality**
+
+Histogram of FLE... The Q-Q plot of the residuals... 
+
+However, linear mixed models do not require residuals to be perfectly normal for valid inference. Importantly, the Central Limit Theorem (CLT) applies to the sampling distribution of parameter estimates (e.g., fixed effect coefficients), not the residuals themselves. As the sample size increases, the distribution of these estimates tends toward normality even if the residuals deviate. Given our large sample size...
+
+  4. **Sample size**
+
+$n=85$ participants; $n=2$ sessions per participant.
+
+::: panel-tabset
+
+### FLE Histogram
+```{r, message=FALSE}
+
+```
+
+### Q-Q Plot
+```{r, message=FALSE}
+
+
+```
+
+### Residual Plot
+```{r, message=FALSE}
+
+
+```
+
+:::
+
+## Linear Mixed Model (LMM)
+
+1) Is there stable between-individual variance in FLE?
+
+2) Do some individuals reliably show FLE < 0, and is that pattern stable across sessions?
+
+Separate true between-person variability from measurement noise
+Allow inference about the probability of negative effects, not just mean differences
+
+::: panel-tabset
+
+### Core Model
+$FLE_ij = \beta_0 + \mu_0i + \epsilon_ij$
+Where:
+- $i=$ participant
+- $j=$ session (1 or 2)
+- $\mu_0i=$ participant-specific mean deviation
+- $\epsilon_ij=$ between-session noise
+
+```{r}
+# core lmm
+FLE_corelmm <- lmer(FLE_dva ~ 1 + (1 | ID), data = all_staircase_FLEs)
+summary(FLE_corelmm)
+```
+
+Core LMM gives:
+- Between-participant variance (true individual differences)
+- Within-participant variance (test–retest noise)
+- Shrunk participant estimates (best linear unbiased predictors)
+
+Limitations of LMM:
+- Doesn't tell us who is negative reliably
+- Sign of FLE (positive/negative) measured indirectly (BLUPs)
+
+:::
+
+### Primary Model
+
+Random intercept + session effect
+```{r}
+# adding session (random intercept + session fixed effect)
+FLE_lmm <- lmer(FLE_dva ~ session + (1 | ID), data = all_staircase_FLEs)
+summary(FLE_lmm)
+```
+
+What this LMM gives:
+- Tests whether FLE shifts systematically from session 1 → 2
+- Improves reliability assessment
+- Controls for practice effects
+
+:::
+
+### Random Slopes Model
+
+Key model for testing reliable qualitative individual differences.
+
+$FLE_ij = \beta_0 + \beta_1 Session_j + \mu_0i + \mu_1i Session_j + \epsilon_ij$
+
+> doesn't work, i don't have enough observations
+
+```{r}
+#doesn't work fsr
+FLE_randomslopes <- lmer(FLE_dva ~ staircase + (staircase | ID), data = all_staircase_FLEs)
+summary(FLE_randomslopes)
+```
+
+What this model says:
+- Do individuals differ in mean FLE? → $\mu_0i$
+- Do individuals differ in stability across sessions? → $\mu_1i$
+
+:::
+
+---
+
+## Modelling "Directional Reversal"
+
+### Prior belief that negative FLE people are *truly negative*
+
+1) Extract participant-level posterior estimates
+
+2) Classify probability of negative FLE
+
+Mean & SE participant FLE
+Probability estimate assuming normality
+> Chance that a given participant is truly negative
+
+3) 
+
+### Prior belief that negative FLE people are *NOT truly negative*
+
+
+
+
+
+## Hierarchical bootstrap
+
+Procedure:
+- resample participants
+- resample sessions within participants
+- recompute FLE each time
+- compute distribution of participant-level means
+
+You then estimate proportion of bootstrap samples where *FLE < 0*
+
+This gives:
+- stability of negative group
+- robustness to outliers
+- distribution-free inference
+
+
+## Discussion
+
+
+Problem is that there are only 2 repeated measures per participant, so we have limited power to detect stable negative FLE in the data (although the experiment itself is relatively robust so we can be more confident in the 2 estimates we have per participant).
+
+---
+
+# July 2026 Updates
+
+## Hierarchical Model using staircase data
+
+(Cottier et al. 2023)
+
+::: panel-tabset
+
+### Data wrangling
+
+```{r}
+# ID as categorical
+all_staircase_FLEs <- all_staircase_FLEs |>
+  dplyr::mutate(
+    ID = factor(ID),
+    staircase = factor(staircase)
+  )
+```
+
+
+:::
+
+### Model
+
+```{r}
+# estimate overall mean, between-participant variance, within-participant variance
+fle_lmer <- lmer(
+  FLE_dva ~ 1 + (1 | ID),
+  data = all_staircase_FLEs,
+  REML = TRUE
+)
+
+summary(fle_lmer)
+
+# pop mean
+fixef(fle_lmer)
+
+# participant-level SD
+participant_sd <- attr(
+  VarCorr(fle_lmer)$ID,
+  "stddev"
+)
+participant_sd
+
+# within-participant SD
+staircase_sd <- sigma(fle_lmer)
+staircase_sd
+```
+
+```{r}
+model_estimates <- data.frame(
+  parameter = c(
+    "Population mean FLE",
+    "Between-participant SD",
+    "Within-participant staircase SD"
+  ),
+  estimate = c(
+    fixef(fle_lmer)[["(Intercept)"]],
+    participant_sd,
+    staircase_sd
+  )
+)
+
+model_estimates
+```
+
+:::
+
+### Intraclass correlation
+
+```{r}
+participant_variance <- as.numeric(
+  VarCorr(fle_lmer)$ID[1]
+)
+
+staircase_variance <- sigma(fle_lmer)^2
+
+icc <- participant_variance /
+  (participant_variance + staircase_variance)
+
+icc
+
+# use library
+library(performance)
+icc(fle_lmer)
+```
+
+Interpretation:
+- ICC near 0: most variation occurs between staircases within the same person.
+- ICC near 1: staircase estimates are highly consistent within participants, and most variation reflects between-participant differences.
+
+ICC was found to be `0.53511`, which suggests that the variation between and within participants is very similar.
+
+:::
+
+### Participant-level FLE
+
+```{r}
+# alternatively
+participant_fle <- tibble::tibble(
+  ID = rownames(ranef(fle_lmer)$ID),
+  random_effect = ranef(fle_lmer)$ID[["(Intercept)"]],
+  estimated_fle =
+    fixef(fle_lmer)[["(Intercept)"]] +
+    random_effect
+)
+
+participant_fle
+
+# negative FLE
+participant_fle |>
+  dplyr::filter(estimated_fle < 0)
+```
+
+:::
+

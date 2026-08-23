@@ -1,0 +1,343 @@
+---
+title: "NewExperimentData"
+date: today
+author: "Imane Lattab"
+institute: "The University of Sydney"
+repository: https://github.com/imanel04/PsychHonours.git
+format: 
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+    theme: sandstone
+    fig_caption: yes
+    table-of-contents: true
+    toc: true
+    toc_depth: 4
+    toc_float: true
+execute:
+  echo: true
+  tidy: true
+number-sections: false 
+---
+
+```{r setup, include=FALSE}
+# LIBRARIES
+library(R.matlab)
+library(quid)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(ggExtra)
+library(patchwork)
+
+# from previous HM report i worked on
+library(viridis)
+library(plotly)
+library(DT)
+library(lme4)
+library(lmerTest) 
+library(ez)
+library(broom.mixed)
+
+# MIXED MODELS
+library(lme4) # mle
+library(lmerTest)
+
+# BAYESIAN
+library(rstan)
+library(tidybayes)
+library(logspline) # density estimation
+library(bridgesampling) # bayes factors
+library(brms)
+
+# for downloading OSF repos
+library(osfr)
+```
+
+## Jye's Jan-Mar 2026 Data
+
+::: panel-tabset
+
+### Data processing
+
+```{r}
+library(tidyverse)
+
+# Read combined trial-level data
+fle_data_26 <- read.csv(
+  "/Users/imanelattab/Desktop/Honours/Data/Directional-Asymmetries-in-MPIs/EXPERIMENT 2 (JAN - MAR 2026)/E2 DATA/ALL_participants_combined.csv"
+)
+
+fle_data_26_long <- read.csv(
+  "/Users/imanelattab/Desktop/Honours/Data/Directional-Asymmetries-in-MPIs/EXPERIMENT 2 (JAN - MAR 2026)/E2 DATA/E2_combined_long_format.csv"
+)
+
+# Initial trial-level cleaning
+fle_trials <- fle_data_26 |>
+  filter(
+    valid == "valid",
+    !is.na(participant),
+    !is.na(foveal_offset)
+  ) |>
+  mutate(
+    participant = factor(participant),
+
+    motion_direction = factor(
+      motion_direction,
+      levels = c("fugal", "petal")
+    ),
+
+    condition = factor(
+      condition,
+      levels = c(
+        "flashbaseline",
+        "centralcue",
+        "motionbaseline",
+        "flash_motion",
+        "motion_flash"
+      )
+    ),
+
+    horizontal_field = case_when(
+      quadrant %in% c("upper_left", "lower_left") ~ "left",
+      quadrant %in% c("upper_right", "lower_right") ~ "right",
+      TRUE ~ NA_character_
+    ),
+
+    vertical_field = case_when(
+      quadrant %in% c("upper_left", "upper_right") ~ "upper",
+      quadrant %in% c("lower_left", "lower_right") ~ "lower",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  arrange(
+    participant,
+    block,
+    trial
+  )
+
+# Check valid trial numbers for each participant and direction
+fle_trials |>
+  count(
+    participant,
+    motion_direction,
+    name = "n_valid_trials"
+  )
+```
+
+
+:::
+
+### Raw FLE
+
+```{r}
+fle_raw_trials <- fle_trials |>
+  filter(
+    motion_direction %in% c("fugal", "petal"),
+    condition %in% c("motion_flash", "flash_motion")
+  ) |>
+  mutate(
+    condition = droplevels(condition),
+
+    # Direction-corrected condition contrast
+    #
+    # Petal FLE:
+    # flash_motion - motion_flash
+    #
+    # Fugal FLE:
+    # motion_flash - flash_motion
+    condition_contrast = case_when(
+      motion_direction == "petal" &
+        condition == "flash_motion" ~ 0.5,
+
+      motion_direction == "petal" &
+        condition == "motion_flash" ~ -0.5,
+
+      motion_direction == "fugal" &
+        condition == "motion_flash" ~ 0.5,
+
+      motion_direction == "fugal" &
+        condition == "flash_motion" ~ -0.5,
+
+      TRUE ~ NA_real_
+    )
+  ) |>
+  filter(!is.na(condition_contrast)) |>
+  arrange(
+    participant,
+    motion_direction,
+    block,
+    trial
+  )
+
+# Check trial numbers in each condition
+fle_raw_trials |>
+  count(
+    participant,
+    motion_direction,
+    condition,
+    name = "n_trials"
+  )
+```
+
+
+:::
+
+### Download datasets
+
+```{r}
+trial_output_path <- paste0(
+  "/Users/imanelattab/Downloads/",
+  "FLE_petal_fugal_trial_level.csv"
+)
+
+write_csv(
+  fle_raw_trials,
+  trial_output_path
+)
+
+message(
+  "Combined trial-level dataset saved to: ",
+  trial_output_path
+)
+```
+
+:::
+
+## Calculate FLE
+
+
+::: panel-tabset
+
+### participant FLE means
+
+```{r}
+fle_condition_means <- fle_raw_trials |>
+  group_by(
+    participant,
+    motion_direction,
+    condition
+  ) |>
+  summarise(
+    mean_foveal_offset = mean(
+      foveal_offset,
+      na.rm = TRUE
+    ),
+
+    sd_foveal_offset = sd(
+      foveal_offset,
+      na.rm = TRUE
+    ),
+
+    n_trials = sum(
+      !is.na(foveal_offset)
+    ),
+
+    se_foveal_offset =
+      sd_foveal_offset / sqrt(n_trials),
+
+    .groups = "drop"
+  )
+
+fle_condition_means
+```
+
+
+:::
+
+### Columns for motion direction
+
+```{r}
+fle_participant_means <- fle_condition_means |>
+  pivot_wider(
+    id_cols = c(
+      participant,
+      motion_direction
+    ),
+
+    names_from = condition,
+
+    values_from = c(
+      mean_foveal_offset,
+      sd_foveal_offset,
+      se_foveal_offset,
+      n_trials
+    ),
+
+    names_sep = "_"
+  )
+```
+
+
+:::
+
+### Direction corrected FLE
+
+```{r}
+fle_participant_FLE <- fle_participant_means |>
+  mutate(
+    FLE_dva = case_when(
+      motion_direction == "petal" ~
+        mean_foveal_offset_flash_motion -
+        mean_foveal_offset_motion_flash,
+
+      motion_direction == "fugal" ~
+        mean_foveal_offset_motion_flash -
+        mean_foveal_offset_flash_motion,
+
+      TRUE ~ NA_real_
+    ),
+
+    # Standard error of the difference between condition means
+    FLE_se = sqrt(
+      se_foveal_offset_flash_motion^2 +
+      se_foveal_offset_motion_flash^2
+    )
+  ) |>
+  filter(
+    !is.na(FLE_dva)
+  ) |>
+  arrange(
+    participant,
+    motion_direction
+  )
+
+fle_participant_FLE
+```
+
+
+:::
+
+### Save dataset
+
+```{r}
+participant_output_path <- paste0(
+  "/Users/imanelattab/Downloads/",
+  "FLE_petal_fugal_participant_means.csv"
+)
+
+write_csv(
+  fle_participant_FLE,
+  participant_output_path
+)
+
+message(
+  "Combined participant-level FLE dataset saved to: ",
+  participant_output_path
+)
+```
+
+
+:::
+
+## Retain trial data
+
+Need to confirm with Jye
+
+
+
+:::
+
