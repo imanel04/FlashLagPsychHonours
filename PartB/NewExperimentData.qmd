@@ -45,6 +45,8 @@ library(broom.mixed)
 # MIXED MODELS
 library(lme4) # mle
 library(lmerTest)
+library(emmeans)
+library(performance)
 
 # BAYESIAN
 library(rstan)
@@ -57,302 +59,980 @@ library(brms)
 library(osfr)
 ```
 
+# Data Pre-processing
+
+::: panel-tabset
+
+## Collapsing over speed and eccentricity
+
+This will leave us with motion direction as the only condition. I will be using this data analysis for the initial analysis on whether not qualitative individual differences exist (comparing "fugal" and "petal" foveal motion).
+
+```{r}
+# raw data folder path (N=88)
+data_folder <- "/Users/imanelattab/Desktop/Honours/Data/Raw_Data_FULL" # ADJUST TO YOUR OWN PATH!
+
+# import participant fikes
+file_paths <- list.files(
+  path = data_folder,
+  pattern = "\\.csv$",
+  full.names = TRUE
+)
+
+raw_FLE_data <- map_dfr(file_paths, \(file_path) {
+  
+  read_csv(
+    file_path,
+    na = c("", "NA", "NaN"),
+    show_col_types = FALSE
+  ) |>
+    mutate(
+      # extract IDs such as "001" from the beginning of each filename
+      ID = str_extract(basename(file_path), "^\\d+"),
+      source_file = basename(file_path),
+      source_row = row_number(),
+      .before = 1
+    )
+})
+```
+
+```{r}
+
+# <---------EXCLUSION CRITERIA--------->
+FLE_data_flagged <- raw_FLE_data |>
+  mutate(
+    missing_foveal_offset = is.na(foveal_offset),
+    
+    excessive_skipped_frames =
+      !is.na(stim_skipped_frames) &
+      stim_skipped_frames > 1,
+    
+    exclusion_reason = case_when(
+      missing_foveal_offset & excessive_skipped_frames ~
+        "Missing foveal offset and >1 skipped frames",
+      
+      missing_foveal_offset ~
+        "Missing foveal offset",
+      
+      excessive_skipped_frames ~
+        ">1 skipped frames",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    excluded = !is.na(exclusion_reason)
+  )
+```
+
+```{r}
+# <--------new cleaned data---------->
+clean_FLE_trials <- FLE_data_flagged |>
+  filter(!excluded) |>
+  mutate(
+    # retain the original signed offset
+    foveal_offset_og = foveal_offset,
+    
+    # reverse sign for only petal trials
+    FLE_dva = if_else(
+      motion_direction == "petal",
+      -foveal_offset,
+      foveal_offset
+    )
+  ) |>
+  select(
+    ID,
+    source_file,
+    block,
+    trial,
+    condition,
+    motion_direction,
+    eccentricity_dva,
+    speed_dva,
+    foveal_offset_og,
+    FLE_dva,
+    everything(),
+    -foveal_offset,
+    -excluded,
+    -exclusion_reason,
+    -missing_foveal_offset,
+    -excessive_skipped_frames
+  ) |>
+  arrange(ID, block, trial)
+```
+
+```{r}
+
+# <----------aggregate over conditions per block---------->
+
+FLE_block_data <- clean_FLE_trials |>
+  mutate(
+    # Convert each individual motion trial from dva to ms
+    FLE_ms_trial = if_else(
+      condition == "centralcue" & !is.na(speed_dva),
+      (FLE_dva / speed_dva) * 1000,
+      NA_real_
+    ),
+    
+    FLE_condition = case_when(
+      condition == "flashbaseline" ~ "flashbaseline",
+      
+      condition == "centralcue" &
+        motion_direction == "petal" ~ "petal",
+      
+      condition == "centralcue" &
+        motion_direction == "fugal" ~ "fugal",
+      
+      TRUE ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(FLE_condition)) |>
+  group_by(
+    ID,
+    block,
+    FLE_condition
+  ) |>
+  summarise(
+    # Spatial average across speed and eccentricity
+    FLE_dva = mean(FLE_dva),
+    
+    # Temporal average after trial-level conversion
+    FLE_ms = if_else(
+      all(is.na(FLE_ms_trial)),
+      NA_real_,
+      mean(FLE_ms_trial, na.rm = TRUE)
+    ),
+    
+    n_trials = n(),
+    n_temporal_trials = sum(!is.na(FLE_ms_trial)),
+    .groups = "drop"
+  ) |>
+  mutate(
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("flashbaseline", "petal", "fugal")
+    )
+  ) |>
+  arrange(
+    ID,
+    block,
+    FLE_condition
+  )
+
+```
+
+```{r}
+# <-------check number of retained rows-------->
+FLE_block_check <- FLE_block_data |>
+  mutate(
+    expected_trials = case_when(
+      FLE_condition == "petal" ~ 12L,
+      FLE_condition == "fugal" ~ 12L,
+      FLE_condition == "flashbaseline" ~ 8L
+    ),
+    missing_trials = expected_trials - n_trials,
+    complete_cell = n_trials == expected_trials
+  )
+
+FLE_block_check
+```
+
+```{r}
+#<--------exclusion report-------->
+excluded_FLE_trials <- FLE_data_flagged |>
+  filter(excluded) |>
+  select(
+    ID,
+    source_file,
+    source_row,
+    block,
+    trial,
+    condition,
+    motion_direction,
+    eccentricity_dva,
+    speed_dva,
+    foveal_offset,
+    stim_skipped_frames,
+    exclusion_reason
+  ) |>
+  arrange(ID, block, trial)
+
+excluded_FLE_trials
+```
+
+```{r}
+# <----------participant level summary--------->
+exclusion_summary <- FLE_data_flagged |>
+  group_by(ID) |>
+  summarise(
+    raw_rows = n(),
+    missing_foveal_offset = sum(missing_foveal_offset),
+    skipped_frames_gt_1 = sum(excessive_skipped_frames),
+    total_excluded = sum(excluded),
+    retained_trials = sum(!excluded),
+    .groups = "drop"
+  )
+```
+
+```{r}
+#<-------------WRITE NEW CSVs--------->
+write_csv(FLE_block_check, "FLE_Sep2026_block_data.csv")
+```
+
+## Preserving speed
+
+```{r}
+# <------aggregate over eccentricity, but retain speed------->
+
+FLE_block_speed_data <- clean_FLE_trials |>
+  mutate(
+    FLE_condition = case_when(
+      condition == "flashbaseline" ~ "flashbaseline",
+      
+      condition == "centralcue" &
+        motion_direction == "petal" ~ "petal",
+      
+      condition == "centralcue" &
+        motion_direction == "fugal" ~ "fugal",
+      
+      TRUE ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(FLE_condition)) |>
+  group_by(
+    ID,
+    block,
+    FLE_condition,
+    speed_dva
+  ) |>
+  summarise(
+    FLE_dva = mean(FLE_dva),
+    n_trials = n(),
+    .groups = "drop"
+  ) |>
+  mutate(
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("flashbaseline", "petal", "fugal")
+    )
+  ) |>
+  arrange(
+    ID,
+    block,
+    FLE_condition,
+    speed_dva
+  )
+
+# <----FLE in temporal units----->
+FLE_block_speed_data <- FLE_block_speed_data |>
+  mutate(
+    FLE_ms = if_else(
+      FLE_condition %in% c("petal", "fugal") &
+        !is.na(speed_dva),
+      (FLE_dva / speed_dva) * 1000,
+      NA_real_
+    )
+  )
+```
+
+```{r}
+# <--check number of retained trials per aggregated row------>
+
+FLE_block_speed_check <- FLE_block_speed_data |>
+  mutate(
+    expected_trials = case_when(
+      FLE_condition %in% c("petal", "fugal") ~ 4L,
+      FLE_condition == "flashbaseline" ~ 8L,
+      TRUE ~ NA_integer_
+    ),
+    
+    missing_trials = expected_trials - n_trials,
+    complete_cell = n_trials == expected_trials
+  )
+
+FLE_block_speed_check
+```
+
+```{r}
+write_csv(
+  FLE_block_speed_check,
+  "FLE_Sep2026_block_speed_data.csv"
+)
+```
+
+
+
+:::
+
 # Data Visualisations
 
 ::: panel-tabset
 
-```{r}
-
-```
-
-
-:::
-
-
----
-
-
-## Jye's Jan-Mar 2026 Data
-
-::: panel-tabset
-
-### Data processing
+## Histogram (DVA)
 
 ```{r}
-library(tidyverse)
-
-# Read combined trial-level data
-fle_data_26 <- read.csv(
-  "/Users/imanelattab/Desktop/Honours/Data/Directional-Asymmetries-in-MPIs/EXPERIMENT 2 (JAN - MAR 2026)/E2 DATA/ALL_participants_combined.csv"
-)
-
-fle_data_26_long <- read.csv(
-  "/Users/imanelattab/Desktop/Honours/Data/Directional-Asymmetries-in-MPIs/EXPERIMENT 2 (JAN - MAR 2026)/E2 DATA/E2_combined_long_format.csv"
-)
-
-# Initial trial-level cleaning
-fle_trials <- fle_data_26 |>
-  filter(
-    valid == "valid",
-    !is.na(participant),
-    !is.na(foveal_offset)
-  ) |>
+FLE_motion_data <- FLE_block_data |>
+  filter(FLE_condition %in% c("petal", "fugal")) |>
   mutate(
-    participant = factor(participant),
-
-    motion_direction = factor(
-      motion_direction,
-      levels = c("fugal", "petal")
-    ),
-
-    condition = factor(
-      condition,
-      levels = c(
-        "flashbaseline",
-        "centralcue",
-        "motionbaseline",
-        "flash_motion",
-        "motion_flash"
-      )
-    ),
-
-    horizontal_field = case_when(
-      quadrant %in% c("upper_left", "lower_left") ~ "left",
-      quadrant %in% c("upper_right", "lower_right") ~ "right",
-      TRUE ~ NA_character_
-    ),
-
-    vertical_field = case_when(
-      quadrant %in% c("upper_left", "upper_right") ~ "upper",
-      quadrant %in% c("lower_left", "lower_right") ~ "lower",
-      TRUE ~ NA_character_
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("petal", "fugal"),
+      labels = c("Petal", "Fugal")
     )
-  ) |>
-  arrange(
-    participant,
-    block,
-    trial
   )
 
-# Check valid trial numbers for each participant and direction
-fle_trials |>
-  count(
-    participant,
-    motion_direction,
-    name = "n_valid_trials"
-  )
-```
-
-
-:::
-
-### Raw FLE
-
-```{r}
-fle_raw_trials <- fle_trials |>
-  filter(
-    motion_direction %in% c("fugal", "petal"),
-    condition %in% c("motion_flash", "flash_motion")
-  ) |>
-  mutate(
-    condition = droplevels(condition),
-
-    # Direction-corrected condition contrast
-    #
-    # Petal FLE:
-    # flash_motion - motion_flash
-    #
-    # Fugal FLE:
-    # motion_flash - flash_motion
-    condition_contrast = case_when(
-      motion_direction == "petal" &
-        condition == "flash_motion" ~ 0.5,
-
-      motion_direction == "petal" &
-        condition == "motion_flash" ~ -0.5,
-
-      motion_direction == "fugal" &
-        condition == "motion_flash" ~ 0.5,
-
-      motion_direction == "fugal" &
-        condition == "flash_motion" ~ -0.5,
-
-      TRUE ~ NA_real_
-    )
-  ) |>
-  filter(!is.na(condition_contrast)) |>
-  arrange(
-    participant,
-    motion_direction,
-    block,
-    trial
-  )
-
-# Check trial numbers in each condition
-fle_raw_trials |>
-  count(
-    participant,
-    motion_direction,
-    condition,
-    name = "n_trials"
-  )
-```
-
-
-:::
-
-### Download datasets
-
-```{r}
-trial_output_path <- paste0(
-  "/Users/imanelattab/Downloads/",
-  "FLE_petal_fugal_trial_level.csv"
-)
-
-write_csv(
-  fle_raw_trials,
-  trial_output_path
-)
-
-message(
-  "Combined trial-level dataset saved to: ",
-  trial_output_path
-)
-```
-
-:::
-
-## Calculate FLE
-
-
-::: panel-tabset
-
-### participant FLE means
-
-```{r}
-fle_condition_means <- fle_raw_trials |>
-  group_by(
-    participant,
-    motion_direction,
-    condition
-  ) |>
+FLE_participant_means <- FLE_motion_data |>
+  group_by(ID, FLE_condition) |>
   summarise(
-    mean_foveal_offset = mean(
-      foveal_offset,
-      na.rm = TRUE
-    ),
-
-    sd_foveal_offset = sd(
-      foveal_offset,
-      na.rm = TRUE
-    ),
-
-    n_trials = sum(
-      !is.na(foveal_offset)
-    ),
-
-    se_foveal_offset =
-      sd_foveal_offset / sqrt(n_trials),
-
+    mean_FLE = mean(FLE_dva, na.rm = TRUE),
+    n_blocks = sum(!is.na(FLE_dva)),
     .groups = "drop"
   )
 
-fle_condition_means
-```
-
-
-:::
-
-### Columns for motion direction
-
-```{r}
-fle_participant_means <- fle_condition_means |>
-  pivot_wider(
-    id_cols = c(
-      participant,
-      motion_direction
-    ),
-
-    names_from = condition,
-
-    values_from = c(
-      mean_foveal_offset,
-      sd_foveal_offset,
-      se_foveal_offset,
-      n_trials
-    ),
-
-    names_sep = "_"
-  )
-```
-
-
-:::
-
-### Direction corrected FLE
-
-```{r}
-fle_participant_FLE <- fle_participant_means |>
+FLE_histogram_stats <- FLE_participant_means |>
+  group_by(FLE_condition) |>
+  summarise(
+    n = sum(!is.na(mean_FLE)),
+    mean = mean(mean_FLE, na.rm = TRUE),
+    sd = sd(mean_FLE, na.rm = TRUE),
+    variance = var(mean_FLE, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
   mutate(
-    FLE_dva = case_when(
-      motion_direction == "petal" ~
-        mean_foveal_offset_flash_motion -
-        mean_foveal_offset_motion_flash,
-
-      motion_direction == "fugal" ~
-        mean_foveal_offset_motion_flash -
-        mean_foveal_offset_flash_motion,
-
-      TRUE ~ NA_real_
-    ),
-
-    # Standard error of the difference between condition means
-    FLE_se = sqrt(
-      se_foveal_offset_flash_motion^2 +
-      se_foveal_offset_motion_flash^2
+    lower_sd = mean - sd,
+    upper_sd = mean + sd,
+    statistics_label = paste0(
+      "N = ", n,
+      "\nMean = ", round(mean, 2), " dva",
+      "\nSD = ", round(sd, 2), " dva",
+      "\nVariance = ", round(variance, 2), " dva²"
     )
-  ) |>
-  filter(
-    !is.na(FLE_dva)
-  ) |>
-  arrange(
-    participant,
-    motion_direction
   )
-
-fle_participant_FLE
 ```
-
-
-:::
-
-### Save dataset
 
 ```{r}
-participant_output_path <- paste0(
-  "/Users/imanelattab/Downloads/",
-  "FLE_petal_fugal_participant_means.csv"
+# PLOT
+ggplot(
+  FLE_participant_means,
+  aes(x = mean_FLE, fill = FLE_condition)
+) +
+  geom_histogram(
+    bins = 20,
+    colour = "white",
+    linewidth = 0.4,
+    show.legend = FALSE
+  ) +
+  
+  # Zero
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 1
+  ) +
+  
+  # Condition mean
+  geom_vline(
+    data = FLE_histogram_stats,
+    aes(xintercept = mean),
+    colour = "darkgreen",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  
+  # Mean - 1 SD
+  geom_vline(
+    data = FLE_histogram_stats,
+    aes(xintercept = lower_sd),
+    colour = "black",
+    linetype = "dotted",
+    linewidth = 0.8
+  ) +
+  
+  # Mean + 1 SD
+  geom_vline(
+    data = FLE_histogram_stats,
+    aes(xintercept = upper_sd),
+    colour = "black",
+    linetype = "dotted",
+    linewidth = 0.8
+  ) +
+  
+  geom_label(
+    data = FLE_histogram_stats,
+    aes(
+      x = Inf,
+      y = Inf,
+      label = statistics_label
+    ),
+    hjust = 1.05,
+    vjust = 1.1,
+    size = 3.4,
+    label.size = 0.2,
+    fill = "white",
+  ) +
+  
+  facet_wrap(~ FLE_condition, nrow = 1) +
+  
+  scale_fill_manual(
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    )
+  ) +
+  
+  labs(
+    title = "Distributions of participant-level flash-lag effects",
+    subtitle = "Participant means across repeated blocks",
+    x = "Mean FLE (dva)",
+    y = "Number of participants"
+  ) +
+  
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 13)
+  )
+```
+
+## Histogram (temporal units)
+
+```{r}
+FLE_motion_data <- FLE_block_data |>
+  filter(FLE_condition %in% c("petal", "fugal")) |>
+  mutate(
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("petal", "fugal"),
+      labels = c("Petal", "Fugal")
+    )
+  )
+
+# One temporal FLE mean per participant and motion direction
+FLE_participant_means_ms <- FLE_motion_data |>
+  group_by(ID, FLE_condition) |>
+  summarise(
+    mean_FLE_ms = mean(FLE_ms, na.rm = TRUE),
+    n_blocks = sum(!is.na(FLE_ms)),
+    .groups = "drop"
+  )
+
+FLE_histogram_stats_ms <- FLE_participant_means_ms |>
+  group_by(FLE_condition) |>
+  summarise(
+    n = sum(!is.na(mean_FLE_ms)),
+    mean = mean(mean_FLE_ms, na.rm = TRUE),
+    sd = sd(mean_FLE_ms, na.rm = TRUE),
+    variance = var(mean_FLE_ms, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    lower_sd = mean - sd,
+    upper_sd = mean + sd,
+    
+    statistics_label = paste0(
+      "N = ", n,
+      "\nMean = ", round(mean, 2), " ms",
+      "\nSD = ", round(sd, 2), " ms",
+      "\nVariance = ", round(variance, 2), " ms²"
+    )
+  )
+```
+
+```{r}
+# PLOT
+ggplot(
+  FLE_participant_means_ms,
+  aes(
+    x = mean_FLE_ms,
+    fill = FLE_condition
+  )
+) +
+  geom_histogram(
+    bins = 20,
+    colour = "white",
+    linewidth = 0.4,
+    show.legend = FALSE
+  ) +
+  
+  # Zero
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 1
+  ) +
+  
+  # Condition mean
+  geom_vline(
+    data = FLE_histogram_stats_ms,
+    aes(xintercept = mean),
+    colour = "darkgreen",
+    linetype = "dashed",
+    linewidth = 1,
+    inherit.aes = FALSE
+  ) +
+  
+  # Mean - 1 SD
+  geom_vline(
+    data = FLE_histogram_stats_ms,
+    aes(xintercept = lower_sd),
+    colour = "black",
+    linetype = "dotted",
+    linewidth = 0.8,
+    inherit.aes = FALSE
+  ) +
+  
+  # Mean + 1 SD
+  geom_vline(
+    data = FLE_histogram_stats_ms,
+    aes(xintercept = upper_sd),
+    colour = "black",
+    linetype = "dotted",
+    linewidth = 0.8,
+    inherit.aes = FALSE
+  ) +
+  
+  geom_label(
+    data = FLE_histogram_stats_ms,
+    aes(
+      x = Inf,
+      y = Inf,
+      label = statistics_label
+    ),
+    hjust = 1.05,
+    vjust = 1.1,
+    size = 3.4,
+    label.size = 0.2,
+    fill = "white",
+    inherit.aes = FALSE
+  ) +
+  
+  facet_wrap(
+    ~ FLE_condition,
+    nrow = 1
+  ) +
+  
+  scale_fill_manual(
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    )
+  ) +
+  
+  labs(
+    title = "Distributions of participant-level flash-lag effects",
+    subtitle = "Participant means across repeated blocks",
+    x = "Mean FLE (ms)",
+    y = "Number of participants"
+  ) +
+  
+  theme_classic(base_size = 13) +
+  
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 13)
+  )
+```
+
+## FLE by participant
+
+```{r}
+FLE_individual_summary <- FLE_motion_data |>
+  group_by(ID, FLE_condition) |>
+  summarise(
+    mean_FLE = mean(FLE_dva, na.rm = TRUE),
+    sd_FLE = sd(FLE_dva, na.rm = TRUE),
+    n_blocks = sum(!is.na(FLE_dva)),
+    .groups = "drop"
+  ) |>
+  mutate(
+    ID = fct_reorder(factor(ID), mean_FLE)
+  )
+
+ggplot(
+  FLE_individual_summary,
+  aes(
+    x = ID,
+    y = mean_FLE,
+    colour = FLE_condition
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    colour = "red",
+    linewidth = 0.9
+  ) +
+  
+  geom_errorbar(
+    aes(
+      ymin = mean_FLE - sd_FLE,
+      ymax = mean_FLE + sd_FLE
+    ),
+    width = 0,
+    linewidth = 0.45,
+    alpha = 0.7
+  ) +
+  
+  geom_point(
+    size = 1.7
+  ) +
+  
+  coord_flip() +
+  facet_wrap(
+    ~ FLE_condition,
+    nrow = 1,
+    scales = "free_y"
+  ) +
+  
+  scale_colour_manual(
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    ),
+    guide = "none"
+  ) +
+  
+  labs(
+    title = "Individual mean FLE and within-participant variability",
+    subtitle = "Points are participant means; error bars show ±1 SD across blocks",
+    x = "Participant",
+    y = "FLE (dva)"
+  ) +
+  
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 5)
+  )
+```
+
+## Averaged over motion-direction
+
+```{r}
+FLE_motion_data |>
+  group_by(ID) |>
+  summarise(
+    mean_FLE = mean(FLE_dva, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  ggplot(aes(x = mean_FLE)) +
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    colour = "white"
+  ) +
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 1
+  ) +
+  labs(
+    x = "Mean FLE (dva)",
+    y = "Count"
+  ) +
+  theme_classic()
+```
+
+## Descriptive stats
+
+```{r}
+# One petal and one fugal mean per participant
+FLE_petal_fugal <- FLE_block_data |>
+  filter(FLE_condition %in% c("petal", "fugal")) |>
+  group_by(ID, FLE_condition) |>
+  summarise(
+    mean_FLE = mean(FLE_dva, na.rm = TRUE),
+    n_blocks = sum(!is.na(FLE_dva)),
+    .groups = "drop"
+  ) |>
+  pivot_wider(
+    names_from = FLE_condition,
+    values_from = c(mean_FLE, n_blocks)
+  )
+
+petal_fugal_correlation <- cor.test(
+  FLE_petal_fugal$mean_FLE_petal,
+  FLE_petal_fugal$mean_FLE_fugal,
+  method = "pearson",
+  use = "complete.obs"
 )
 
-write_csv(
-  fle_participant_FLE,
-  participant_output_path
+correlation_summary <- tibble(
+  n = sum(
+    complete.cases(
+      FLE_petal_fugal$mean_FLE_petal,
+      FLE_petal_fugal$mean_FLE_fugal
+    )
+  ),
+  r = unname(petal_fugal_correlation$estimate),
+  p = petal_fugal_correlation$p.value,
+  CI_lower = petal_fugal_correlation$conf.int[1],
+  CI_upper = petal_fugal_correlation$conf.int[2]
 )
 
-message(
-  "Combined participant-level FLE dataset saved to: ",
-  participant_output_path
+correlation_summary
+```
+
+## Speed x motion direction
+
+```{r}
+# One mean FLE per participant for each motion direction × speed
+FLE_direction_speed_means <- FLE_block_speed_data |>
+  filter(
+    FLE_condition %in% c("petal", "fugal"),
+    speed_dva %in% c(10, 15, 20)
+  ) |>
+  group_by(
+    ID,
+    FLE_condition,
+    speed_dva
+  ) |>
+  summarise(
+    mean_FLE = mean(FLE_dva, na.rm = TRUE),
+    n_blocks = sum(!is.na(FLE_dva)),
+    .groups = "drop"
+  ) |>
+  mutate(
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("petal", "fugal"),
+      labels = c("Petal", "Fugal")
+    ),
+    speed_dva = factor(
+      speed_dva,
+      levels = c(10, 15, 20),
+      labels = c("10 dva/s", "15 dva/s", "20 dva/s")
+    )
+  )
+
+# PLOT
+ggplot(
+  FLE_direction_speed_means,
+  aes(
+    x = mean_FLE,
+    fill = FLE_condition
+  )
+) +
+  geom_histogram(
+    bins = 20,
+    colour = "white",
+    linewidth = 0.4,
+    show.legend = FALSE
+  ) +
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 0.9
+  ) +
+  facet_grid(
+    rows = vars(FLE_condition),
+    cols = vars(speed_dva)
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    )
+  ) +
+  labs(
+    title = "Participant-level FLE distributions by motion direction and speed",
+    subtitle = "Each observation is one participant mean across blocks and eccentricities",
+    x = "Mean FLE (dva)",
+    y = "Count"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+```{r}
+# One value per participant × direction × speed
+FLE_speed_plot_data <- FLE_block_speed_data |>
+  filter(
+    FLE_condition %in% c("petal", "fugal"),
+    speed_dva %in% c(10, 15, 20)
+  ) |>
+  group_by(ID, FLE_condition, speed_dva) |>
+  summarise(
+    mean_FLE = mean(FLE_dva, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("petal", "fugal"),
+      labels = c("Petal", "Fugal")
+    )
+  )
+
+FLE_speed_summary <- FLE_speed_plot_data |>
+  group_by(FLE_condition, speed_dva) |>
+  summarise(
+    n = sum(!is.na(mean_FLE)),
+    mean_FLE = mean(mean_FLE, na.rm = TRUE),
+    sd_FLE = sd(mean_FLE, na.rm = TRUE),
+    se_FLE = sd_FLE / sqrt(n),
+    CI_lower = mean_FLE - qt(0.975, df = n - 1) * se_FLE,
+    CI_upper = mean_FLE + qt(0.975, df = n - 1) * se_FLE,
+    .groups = "drop"
+  )
+
+ggplot() +
+  # Individual participant trajectories
+  geom_line(
+    data = FLE_speed_plot_data,
+    aes(
+      x = speed_dva,
+      y = mean_FLE,
+      group = interaction(ID, FLE_condition),
+      colour = FLE_condition
+    ),
+    alpha = 0.10,
+    linewidth = 0.4
+  ) +
+  
+  # Zero FLE
+  geom_hline(
+    yintercept = 0,
+    colour = "red",
+    linetype = "dashed",
+    linewidth = 0.8
+  ) +
+  
+  # Confidence intervals
+  geom_errorbar(
+    data = FLE_speed_summary,
+    aes(
+      x = speed_dva,
+      ymin = CI_lower,
+      ymax = CI_upper,
+      colour = FLE_condition
+    ),
+    width = 0.35,
+    linewidth = 0.8,
+    position = position_dodge(width = 0.5)
+  ) +
+  
+  # Group means
+  geom_line(
+    data = FLE_speed_summary,
+    aes(
+      x = speed_dva,
+      y = mean_FLE,
+      group = FLE_condition,
+      colour = FLE_condition
+    ),
+    linewidth = 1.3
+  ) +
+  
+  geom_point(
+    data = FLE_speed_summary,
+    aes(
+      x = speed_dva,
+      y = mean_FLE,
+      colour = FLE_condition,
+      fill = FLE_condition
+    ),
+    shape = 21,
+    size = 3.5,
+    stroke = 0.8
+  ) +
+  
+  scale_x_continuous(
+    breaks = c(10, 15, 20)
+  ) +
+  
+  scale_colour_manual(
+    name = "Motion direction",
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    )
+  ) +
+  
+  scale_fill_manual(
+    name = "Motion direction",
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    )
+  ) +
+  
+  labs(
+    title = "FLE as a function of speed and motion direction",
+    subtitle = "Thick lines show group means and 95% confidence intervals",
+    x = "Speed (dva/s)",
+    y = "Mean FLE (dva)"
+  ) +
+  
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+```
+
+:::
+
+# Exploratory Analyses
+
+::: panel-tabset
+
+## Speed x motion direction
+
+```{r}
+FLE_speed_model_data <- FLE_block_speed_data |>
+  filter(
+    FLE_condition %in% c("petal", "fugal"),
+    speed_dva %in% c(10, 15, 20)
+  ) |>
+  mutate(
+    ID = factor(ID),
+    block = factor(block),
+    
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("fugal", "petal")
+    ),
+    
+    # Centred speed: 0 represents 15 dva/s
+    speed_c = speed_dva - 15
+  )
+
+FLE_speed_model <- lmer(
+  FLE_dva ~ speed_c * FLE_condition +
+    (1 + speed_c + FLE_condition | ID) +
+    (1 | ID:block),
+  data = FLE_speed_model_data,
+  REML = FALSE
 )
+
+summary(FLE_speed_model)
+anova(FLE_speed_model, type = 3)
+```
+
+```{r}
+speed_slopes <- emtrends(
+  FLE_speed_model,
+  ~ FLE_condition,
+  var = "speed_c"
+)
+
+speed_slopes
+
+estimated_FLE <- emmeans(
+  FLE_speed_model,
+  ~ FLE_condition | speed_c,
+  at = list(speed_c = c(-5, 0, 5))
+)
+
+estimated_FLE
 ```
 
 
 :::
-
-## Retain trial data
-
-Need to confirm with Jye
-
-
-
-:::
-
