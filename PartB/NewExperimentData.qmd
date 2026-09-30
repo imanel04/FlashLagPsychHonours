@@ -774,6 +774,167 @@ correlation_summary <- tibble(
 correlation_summary
 ```
 
+```{r}
+FLE_paired_blocks <- FLE_block_data |>
+  filter(FLE_condition %in% c("petal", "fugal")) |>
+  select(ID, block, FLE_condition, FLE_dva) |>
+  pivot_wider(
+    names_from = FLE_condition,
+    values_from = FLE_dva
+  )
+
+cor(
+  FLE_paired_blocks$petal,
+  FLE_paired_blocks$fugal,
+  use = "complete.obs",
+  method = "pearson"
+)
+```
+
+```{r}
+# Pair petal and fugal FLE within each participant's block
+FLE_paired_blocks <- FLE_block_data |>
+  filter(FLE_condition %in% c("petal", "fugal")) |>
+  select(ID, block, FLE_condition, FLE_dva) |>
+  pivot_wider(
+    names_from = FLE_condition,
+    values_from = FLE_dva
+  )
+
+FLE_individual_correlations <- FLE_paired_blocks |>
+  group_by(ID) |>
+  summarise(
+    n_blocks = sum(complete.cases(petal, fugal)),
+    
+    correlation = if (
+      n_blocks >= 3 &&
+      sd(petal, na.rm = TRUE) > 0 &&
+      sd(fugal, na.rm = TRUE) > 0
+    ) {
+      cor(
+        petal,
+        fugal,
+        use = "complete.obs",
+        method = "pearson"
+      )
+    } else {
+      NA_real_
+    },
+    
+    .groups = "drop"
+  )
+
+FLE_individual_correlations
+
+ggplot(
+  FLE_individual_correlations,
+  aes(x = correlation)
+) +
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    colour = "white",
+    linewidth = 0.4
+  ) +
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 0.9
+  ) +
+  scale_x_continuous(
+    limits = c(-1, 1),
+    breaks = seq(-1, 1, by = 0.25)
+  ) +
+  labs(
+    title = "Distribution of within-participant correlations",
+    subtitle = "Correlation between petal and fugal FLE across blocks",
+    x = "Pearson correlation coefficient",
+    y = "Number of participants"
+  ) +
+  theme_classic(base_size = 13)
+```
+
+```{r}
+# Pair matching petal and fugal trials
+FLE_paired_trials <- clean_FLE_trials |>
+  filter(
+    condition == "centralcue",
+    motion_direction %in% c("petal", "fugal")
+  ) |>
+  select(
+    ID,
+    block,
+    speed_dva,
+    eccentricity_dva,
+    motion_direction,
+    FLE_dva
+  ) |>
+  pivot_wider(
+    names_from = motion_direction,
+    values_from = FLE_dva
+  ) |>
+  drop_na(petal, fugal)
+
+FLE_individual_trial_correlations <- FLE_paired_trials |>
+  group_by(ID) |>
+  summarise(
+    n_pairs = n(),
+    
+    correlation = if (
+      n_pairs >= 3 &&
+      sd(petal, na.rm = TRUE) > 0 &&
+      sd(fugal, na.rm = TRUE) > 0
+    ) {
+      cor(
+        petal,
+        fugal,
+        use = "complete.obs",
+        method = "pearson"
+      )
+    } else {
+      NA_real_
+    },
+    
+    .groups = "drop"
+  )
+
+FLE_individual_trial_correlations
+
+ggplot(
+  FLE_individual_trial_correlations,
+  aes(x = correlation)
+) +
+  geom_histogram(
+    bins = 20,
+    fill = "steelblue",
+    colour = "white",
+    linewidth = 0.4
+  ) +
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 0.9
+  ) +
+  scale_x_continuous(
+    limits = c(-1, 1),
+    breaks = seq(-1, 1, by = 0.25)
+  ) +
+  labs(
+    title = "Distribution of within-participant trial-level correlations",
+    subtitle = paste(
+      "Petal and fugal trials paired by block,",
+      "speed, and eccentricity"
+    ),
+    x = "Petal–fugal Pearson correlation",
+    y = "Number of participants"
+  ) +
+  theme_classic(base_size = 13)
+
+FLE_individual_trial_correlations |>
+  count(n_pairs)
+```
+
+
 ## Speed x motion direction
 
 ```{r}
@@ -848,6 +1009,135 @@ ggplot(
     strip.text = element_text(face = "bold")
   )
 ```
+
+```{r}
+# One mean temporal FLE per participant × direction × speed
+FLE_direction_speed_means_ms <- FLE_block_speed_data |>
+  filter(
+    FLE_condition %in% c("petal", "fugal"),
+    speed_dva %in% c(10, 15, 20),
+    !is.na(FLE_ms)
+  ) |>
+  group_by(
+    ID,
+    FLE_condition,
+    speed_dva
+  ) |>
+  summarise(
+    mean_FLE_ms = mean(FLE_ms, na.rm = TRUE),
+    n_blocks = sum(!is.na(FLE_ms)),
+    .groups = "drop"
+  ) |>
+  mutate(
+    FLE_condition = factor(
+      FLE_condition,
+      levels = c("petal", "fugal"),
+      labels = c("Petal", "Fugal")
+    ),
+    speed_dva = factor(
+      speed_dva,
+      levels = c(10, 15, 20),
+      labels = c("10 dva/s", "15 dva/s", "20 dva/s")
+    )
+  )
+```
+```{r}
+ggplot(
+  FLE_direction_speed_means_ms,
+  aes(
+    x = mean_FLE_ms,
+    fill = FLE_condition
+  )
+) +
+  geom_histogram(
+    bins = 20,
+    colour = "white",
+    linewidth = 0.4,
+    show.legend = FALSE
+  ) +
+  geom_vline(
+    xintercept = 0,
+    colour = "red",
+    linewidth = 0.9
+  ) +
+  facet_grid(
+    rows = vars(FLE_condition),
+    cols = vars(speed_dva)
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    )
+  ) +
+  labs(
+    title = "Participant-level temporal FLE distributions",
+    subtitle = paste(
+      "Distributions by motion direction and speed;",
+      "each observation is one participant mean across blocks and eccentricities"
+    ),
+    x = "Mean FLE (ms)",
+    y = "Count"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+```{r}
+# One spatial and temporal FLE per participant × speed
+FLE_participant_speed_means <- FLE_block_speed_data |>
+  filter(
+    FLE_condition %in% c("petal", "fugal"),
+    speed_dva %in% c(10, 15, 20)
+  ) |>
+  group_by(ID, speed_dva) |>
+  summarise(
+    participant_FLE_dva = mean(FLE_dva, na.rm = TRUE),
+    participant_FLE_ms  = mean(FLE_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+FLE_direction_speed_population_stats <- FLE_block_speed_data |>
+  filter(
+    FLE_condition %in% c("petal", "fugal"),
+    speed_dva %in% c(10, 15, 20)
+  ) |>
+  group_by(
+    ID,
+    FLE_condition,
+    speed_dva
+  ) |>
+  summarise(
+    participant_FLE_dva = mean(FLE_dva, na.rm = TRUE),
+    participant_FLE_ms = mean(FLE_ms, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  group_by(
+    FLE_condition,
+    speed_dva
+  ) |>
+  summarise(
+    n = sum(
+      complete.cases(participant_FLE_dva, participant_FLE_ms)
+    ),
+    
+    mean_FLE_dva = mean(participant_FLE_dva, na.rm = TRUE),
+    SD_FLE_dva = sd(participant_FLE_dva, na.rm = TRUE),
+    
+    mean_FLE_ms = mean(participant_FLE_ms, na.rm = TRUE),
+    SD_FLE_ms = sd(participant_FLE_ms, na.rm = TRUE),
+    
+    .groups = "drop"
+  ) |>
+  arrange(FLE_condition, speed_dva)
+
+FLE_direction_speed_population_stats
+```
+
 
 ```{r}
 # One value per participant × direction × speed
@@ -977,6 +1267,75 @@ ggplot() +
 
 ```
 
+```{r}
+FLE_low_high_speed <- FLE_speed_plot_data |>
+  filter(speed_dva %in% c(10, 20)) |>
+  select(ID, FLE_condition, speed_dva, mean_FLE) |>
+  pivot_wider(
+    names_from = speed_dva,
+    values_from = mean_FLE,
+    names_prefix = "speed_"
+  )
+
+ggplot(
+  FLE_low_high_speed,
+  aes(
+    x = speed_10,
+    y = speed_20,
+    colour = FLE_condition
+  )
+) +
+  # Zero-reference lines
+  geom_hline(
+    yintercept = 0,
+    colour = "grey40",
+    linetype = "dashed",
+    linewidth = 0.7
+  ) +
+  geom_vline(
+    xintercept = 0,
+    colour = "grey40",
+    linetype = "dashed",
+    linewidth = 0.7
+  ) +
+  
+  # Participants
+  geom_point(
+    size = 2.5,
+    alpha = 0.75
+  ) +
+  
+  # Separate regression line for each direction
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = TRUE,
+    linewidth = 1
+  ) +
+  
+  scale_colour_manual(
+    name = "Motion direction",
+    values = c(
+      "Petal" = "#D95F8D",
+      "Fugal" = "#377EB8"
+    )
+  ) +
+  
+  coord_equal() +
+  
+  labs(
+    title = "Relationship between FLE at the lowest and highest speeds",
+    subtitle = "Each point represents one participant",
+    x = "Mean FLE at 10 dva/s (dva)",
+    y = "Mean FLE at 20 dva/s (dva)"
+  ) +
+  
+  theme_classic(base_size = 13)
+
+# work on this plot
+```
+
+
 :::
 
 # Exploratory Analyses
@@ -1034,5 +1393,66 @@ estimated_FLE <- emmeans(
 estimated_FLE
 ```
 
+## SD(spatial) = speed x SD(temporal)
+
+```{r}
+FLE_SD_by_speed <- FLE_participant_speed_means |>
+  group_by(speed_dva) |>
+  summarise(
+    SD_spatial = sd(participant_FLE_dva, na.rm = TRUE),
+    SD_temporal = sd(participant_FLE_ms, na.rm = TRUE),
+    predicted_SD_spatial =
+      speed_dva * SD_temporal / 1000,
+    difference =
+      SD_spatial - predicted_SD_spatial,
+    .groups = "drop"
+  )
+
+FLE_SD_by_speed
+```
+
+```{r}
+FLE_SD_by_speed |>
+  ggplot(
+    aes(
+      x = speed_dva,
+      y = SD_spatial
+    )
+  ) +
+  geom_point(size = 3) +
+  geom_line() +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ 0 + x,
+    se = FALSE,
+    linetype = "dashed"
+  ) +
+  scale_x_continuous(breaks = c(10, 15, 20)) +
+  labs(
+    x = "Speed (dva/s)",
+    y = "Between-participant SD of FLE (dva)",
+    title = "Does spatial variability scale with speed?"
+  ) +
+  theme_classic()
+```
+
+```{r}
+FLE_SD_by_speed |>
+  ggplot(
+    aes(
+      x = speed_dva,
+      y = SD_temporal
+    )
+  ) +
+  geom_point(size = 3) +
+  geom_line() +
+  scale_x_continuous(breaks = c(10, 15, 20)) +
+  labs(
+    x = "Speed (dva/s)",
+    y = "Between-participant SD of FLE (ms)",
+    title = "Temporal variability across speed"
+  ) +
+  theme_classic()
+```
 
 :::
