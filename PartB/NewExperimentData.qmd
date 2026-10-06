@@ -66,11 +66,11 @@ library(osfr)
 ```{r}
 # FLE data everaged over conditions
 # N=87, 
-FLE_block_data <- read.csv("FLE_Sep2026_block_data.csv")
+FLE_block_data <- read.csv("data/FLE_Sep2026_block_data.csv")
 
-FLE_block_speed_data <- read.csv("FLE_Sep2026_block_speed_data.csv")
+FLE_block_speed_data <- read.csv("data/FLE_Sep2026_block_speed_data.csv")
 
-FLE_trial_data <- read.csv("FLE_Sep2026_trial_data.csv")
+FLE_trial_data <- read.csv("data/FLE_Sep2026_trial_data.csv")
 ```
 
 # Data Visualisations

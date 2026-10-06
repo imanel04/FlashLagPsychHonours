@@ -50,9 +50,7 @@ Initially, I will perform the analyses on the data that collapses motion-directi
 ### Data
 
 ```{r}
-FLE_data_og <- read.csv(
-  "/Users/imanelattab/Desktop/Honours/Data/FlashLagPsychHonours/PartB/FLE_Sep2026_block_data.csv"
-)
+FLE_data_og <- read.csv("data/FLE_Sep2026_block_data.csv")
 
 # Keep only fugal motion, preserving the existing block-level summaries
 FLE_data_fugal <- FLE_data_og |>

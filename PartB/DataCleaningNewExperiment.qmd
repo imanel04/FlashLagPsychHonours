@@ -567,8 +567,6 @@ FLE_trial_data <- clean_FLE_trials |>
     stim_skipped_frames
   ) |>
   arrange(ID, block, trial)
-
-write_csv(FLE_trial_data, "FLE_Sep2026_trial_data.csv")
 ```
 
 ---
@@ -576,12 +574,12 @@ write_csv(FLE_trial_data, "FLE_Sep2026_trial_data.csv")
 ## Write and Read in cleaned data files
 
 ```{r}
-write_csv(FLE_trial_data, "FLE_Sep2026_trial_data.csv")
-FLE_block_data <- read.csv("FLE_Sep2026_block_data.csv")
+write_csv(FLE_trial_data, "data/FLE_Sep2026_trial_data.csv")
+FLE_block_data <- read.csv("data/FLE_Sep2026_block_data.csv")
 
-write_csv(FLE_trial_data, "FLE_Sep2026_block_speed_data.csv")
-FLE_block_speed_data <- read.csv("FLE_Sep2026_block_speed_data.csv")
+write_csv(FLE_trial_data, "data/FLE_Sep2026_block_speed_data.csv")
+FLE_block_speed_data <- read.csv("data/FLE_Sep2026_block_speed_data.csv")
 
-write_csv(FLE_trial_data, "FLE_Sep2026_trial_data.csv")
-FLE_trial_data <- read.csv("FLE_Sep2026_trial_data.csv")
+write_csv(FLE_trial_data, "data/FLE_Sep2026_trial_data.csv")
+FLE_trial_data <- read.csv("data/FLE_Sep2026_trial_data.csv")
 ```
