@@ -1,0 +1,77 @@
+---
+format:
+  pdf:
+    documentclass: article
+    pdf-engine: xelatex
+    toc: true
+    toc-depth: 4
+    number-sections: false
+    table-of-contents: false
+
+---
+# Bayesian model specifications
+
+For $\mathcal{N}(m,v)$, the second argument denotes variance. Half-normal distributions are specified by their scale parameters.
+
+## Unconstrained normal population model
+
+$$
+\begin{aligned}
+y_{ij}\mid\theta_i
+&\sim \mathcal{N}(\theta_i,\sigma_\epsilon^2),\\
+\theta_i
+&\sim \mathcal{N}(\mu_\theta,\sigma_\theta^2),\\
+\log\mu_\theta
+&\sim \mathcal{N}(0.5,1^2),\\
+z
+&\sim \mathcal{N}\!\left(-\frac23,\left(\frac23\right)^2\right),\\
+p&=\frac{\Phi(z)}{2},\\
+\sigma_\theta
+&=-\frac{\mu_\theta}{\Phi^{-1}(p)},\\
+\pi(\sigma_\epsilon)
+&\propto\sigma_\epsilon^{-2},
+\qquad \sigma_\epsilon>0.
+\end{aligned}
+$$
+
+## Approximate dominance model
+
+The specification was identical to the unconstrained model except that:
+
+$$
+z\sim\mathcal{N}(-3.5,0.5^2).
+$$
+
+This concentrated prior probability on small negative-effect proportions.
+
+## Strictly positive log-normal population model
+
+$$
+\begin{aligned}
+y_{ij}\mid\theta_i
+&\sim\mathcal{N}(\theta_i,\sigma_\epsilon^2),\\
+\log\theta_i
+&\sim\mathcal{N}(\mu_{\log},\sigma_{\log}^2),\\
+\mu_{\log}
+&\sim\mathcal{N}(0.5,1^2),\\
+\sigma_{\log}
+&\sim\operatorname{HalfNormal}(1),\\
+\sigma_\epsilon
+&\sim\operatorname{HalfNormal}(5),\\
+P(\theta_i<0)&=0.
+\end{aligned}
+$$
+
+Population summaries on the original spatial scale were derived as:
+
+$$
+\begin{aligned}
+\mu_\theta
+&=\exp\!\left(\mu_{\log}+\frac{\sigma_{\log}^2}{2}\right),\\
+\sigma_\theta
+&=\sqrt{
+\left[\exp(\sigma_{\log}^2)-1\right]
+\exp(2\mu_{\log}+\sigma_{\log}^2)
+}.
+\end{aligned}
+$$

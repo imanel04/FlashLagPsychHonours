@@ -50,7 +50,7 @@ Initially, I will perform the analyses on the data that collapses motion-directi
 ### Data
 
 ```{r}
-FLE_data_og <- read.csv("/Users/imanelattab/Desktop/Honours/Data/FlashLagPsychHonours/PartB/FLE_Sep2026_block_data.csv") # check zip! in Cottier2023/FLE_Raw
+FLE_data_og <- read.csv("/Users/imanelattab/Desktop/Honours/Data/FlashLagPsychHonours/PartB/FLE_Sep2026_block_data.csv") # can request data from imane!
 
 # average over motion-direction within each block (i.e. collapse)
 FLE_data <- FLE_data_og |>

@@ -1,5 +1,5 @@
 ---
-title: "DataCleaning"
+title: "Linear Models"
 date: today
 author: "Imane Lattab"
 institute: "The University of Sydney"
@@ -59,54 +59,13 @@ library(brms)
 library(osfr)
 ```
 
-## Cottier et al. 2023 FLE
+# Cottier et al. 2023 FLE
 
 https://doi.org/10.1167/jov.23.10.8
 
-### Load in Data
+## Load in Data
 ```{r}
-# # read in data
-# FLE <- readMat("../../Cottier2023_OSF/Data/Effect files/FLE_Values.mat") # https://osf.io/s4aqg/overview
-# 
-# # data wrangling
-# overallOfBothSessions<- FLE$FLE.Overall
-# overallOfBothSessions<- as_tibble(overallOfBothSessions)
-# 
-# sess1JoV <-  as_tibble(FLE$FLE.Sess1) # n=85
-# sess2JoV <-  as_tibble(FLE$FLE.Sess2) # n = 85
-# 
-# sess1JoV <- sess1JoV |>
-#   rename(
-#     ID     = V1,
-#     pixels = V2,
-#     dva    = V3
-#   )
-# 
-# sess2JoV <- sess2JoV |>
-#   rename(
-#     ID     = V1,
-#     pixels = V2,
-#     dva    = V3
-#   )
-# 
-# sess1JoV$session <- 1
-# sess2JoV$session <- 2
-# 
-# myOverallJoV <- rbind(sess1JoV, sess2JoV)
-# 
-# # check for na and duplicates (none)
-# anyNA(myOverallJoV)
-# any(duplicated(sess1JoV$ID))
-# any(duplicated(sess2JoV$ID))
-# 
-# # save as csv for future
-# write_csv(myOverallJoV, "Cottier2023_2Sessions.csv")
-
-# 2 sessions (2 repeated measures)
-myOverallJoV <- read.csv("/Users/imanelattab/Desktop/Cottier2023/Cottier2023_2Sessions.csv") # check zip folder (Cottier2023) for file!
-
-# WE WILL BE USING THE 8 STAIRCASE DATA
-
+# <-----------STAIRCASES-------------->
 # 8 staircases (8 repeated measures)
 all_staircase_FLEs <- read.csv("/Users/imanelattab/Desktop/Cottier2023/FLE_Raw/all_participants_staircase_FLEs.csv")
 
@@ -117,12 +76,27 @@ all_staircase_FLEs <- all_staircase_FLEs |>
     session = factor(session),
     staircase = factor(staircase)
   )
+
+# <-----------SESSIONS-------------->
+# 2 sessions (2 repeated measures)
+myOverallJoV <- read.csv("data/Cottier2023/Cottier2023_2Sessions.csv") # UNZIP!
+
+# ID and session as categorical
+myOverallJoV <- myOverallJoV |>
+  dplyr::mutate(
+    ID = factor(ID),
+    session = factor(session)
+  )
 ```
 
 
-### Data Visualisations
+## Sessions
 
 The data analyses that is available on the OSF of the original paper had used sessions as the repeated measure. For the initial presentation of this dataset, we will keep the data in the original format. Later, we will be using staircases as the repeated measure (4 per session, 8 per participant).
+
+---
+
+### Data Visualisations
 
 ::: panel-tabset
 
@@ -220,8 +194,6 @@ ggplot(myOverallJoV_means, aes(x = dva)) +
     plot.title = element_text(face = "bold")
   )
 ```
-
-temporal units
 
 ```{r}
 rotation_speed_deg_s <- 180
@@ -603,176 +575,11 @@ kable(change_summary,
 :::
 
 
-### Multiple Staircase
+## Multiple Staircase
 
 We will go back to the 8 staircase data for analyses since it provides us with more repeated measures.
 
-::: panel-tabset
 
-#### Data Pipeline
-```{r}
-# <--------COMMENTED BECAUSE I'VE RUN IT AND SAVED AS CSV!-------->
-
-# # Folder containing all participant-session CSV files
-# data_folder <- "/Users/imanelattab/Downloads/FLE_Holcombe"
-# 
-# # Number used in the original MATLAB processing:
-# # tail(..., AVOVER + 1) means the final 21 trials
-# AVOVER <- 20
-# n_trials_to_average <- AVOVER + 1
-# 
-# # Convert pixels to degrees of visual angle
-# tc_dva <- function(x, screen_distance = 500) {
-# 
-#   screen_width <- 543.7  # mm
-#   resolution_x <- 1920
-# 
-#   pixel_width <- screen_width / resolution_x
-# 
-#   atan((x * pixel_width) / screen_distance) * 180 / pi
-# }
-# 
-# # Convert displacement in degrees of polar angle to DVA
-# polar_deg_to_dva <- function(x, radius_px = 380) {
-# 
-#   tangential_displacement_px <- x * radius_px * pi / 180
-# 
-#   tc_dva(tangential_displacement_px)
-# }
-# 
-# # Process one participant-session CSV file
-# process_fle_file <- function(file_path) {
-# 
-#   # Extract participant ID and session number from filename
-#   #
-#   # Example:
-#   # DID_FLE_1_2.csv
-#   # Participant ID = 1
-#   # Session = 2
-#   file_info <- str_match(
-#     basename(file_path),
-#     "^DID_FLE_([0-9]+)_([0-9]+)\\.csv$"
-#   )
-# 
-#   participant_id <- as.integer(file_info[, 2])
-#   session_number <- as.integer(file_info[, 3])
-# 
-#   # Stop if the filename does not have the expected format
-#   if (is.na(participant_id) || is.na(session_number)) {
-#     warning("Could not extract ID/session from: ", basename(file_path))
-#     return(NULL)
-#   }
-# 
-#   # Read and clean the data
-#   fle <- read_csv(file_path, show_col_types = FALSE) |>
-#     filter(Prac != "Yes")
-# 
-#   # Function to calculate the PSE for one staircase
-# calculate_staircase_pse <- function(data, stair_number, stair_column) {
-# 
-#   staircase_values <- data |>
-#     filter(StairNum == stair_number) |>
-#     pull({{ stair_column }})
-# 
-#   # Remove missing values from the numeric vector
-#   staircase_values <- staircase_values[!is.na(staircase_values)]
-# 
-#   if (length(staircase_values) == 0) {
-#     warning(
-#       "Participant ", participant_id,
-#       ", session ", session_number,
-#       ", staircase ", stair_number,
-#       " contains no valid observations."
-#     )
-# 
-#     return(NA_real_)
-#   }
-# 
-#   if (length(staircase_values) < n_trials_to_average) {
-#     warning(
-#       "Participant ", participant_id,
-#       ", session ", session_number,
-#       ", staircase ", stair_number,
-#       " has only ", length(staircase_values),
-#       " non-missing trials."
-#     )
-#   }
-# 
-#   mean(
-#     tail(staircase_values, n_trials_to_average),
-#     na.rm = TRUE
-#   )
-# }
-# 
-#   # Raw staircase PSEs
-#   ST1_PSE <- calculate_staircase_pse(fle, 1, Stair1)
-#   ST2_PSE <- calculate_staircase_pse(fle, 2, Stair2)
-#   ST3_PSE <- calculate_staircase_pse(fle, 3, Stair3)
-#   ST4_PSE <- calculate_staircase_pse(fle, 4, Stair4)
-# 
-#   # Return one row per staircase
-#   tibble(
-#     ID = participant_id,
-#     session = session_number,
-#     staircase = 1:4,
-#     direction = c("CW", "CW", "CCW", "CCW"),
-#     PSE_deg = c(
-#       ST1_PSE,
-#       ST2_PSE,
-#       ST3_PSE,
-#       ST4_PSE
-#     )
-#   ) |>
-#     mutate(
-#       # Reverse the sign for counterclockwise staircases so that
-#       # positive values consistently indicate a positive FLE
-#       FLE_deg = if_else(
-#         direction == "CCW",
-#         -PSE_deg,
-#         PSE_deg
-#       ),
-# 
-#       FLE_dva = polar_deg_to_dva(FLE_deg),
-# 
-#       source_file = basename(file_path)
-#     )
-# }
-# 
-# # Find all files matching the expected naming convention
-# fle_files <- list.files(
-#   path = data_folder,
-#   pattern = "^DID_FLE_[0-9]+_[0-9]+\\.csv$",
-#   full.names = TRUE
-# )
-# 
-# # Process every file and combine the results
-# all_staircase_FLEs <- map_dfr(
-#   fle_files,
-#   process_fle_file
-# ) |>
-#   arrange(ID, session, staircase)
-# 
-# # Inspect the resulting dataset
-# print(all_staircase_FLEs)
-# 
-# # Save the combined dataset
-# output_path <- file.path(
-#   data_folder,
-#   "all_participants_staircase_FLEs.csv"
-# )
-# 
-# write_csv(
-#   all_staircase_FLEs,
-#   output_path
-# )
-# 
-# message("Combined dataset saved to: ", output_path)
-
-# already loaded in at the start!
-str(all_staircase_FLEs)
-```
-
-:::
 
 ---
 

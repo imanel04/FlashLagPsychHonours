@@ -32,6 +32,7 @@ library(knitr)
 library(kableExtra)
 library(ggExtra)
 library(patchwork)
+library(purrr)
 
 # from previous HM report i worked on
 library(viridis)
@@ -46,6 +47,7 @@ library(broom.mixed)
 library(lme4) # mle
 library(lmerTest)
 library(emmeans)
+library(parameters)
 library(performance)
 
 # BAYESIAN
@@ -59,312 +61,22 @@ library(brms)
 library(osfr)
 ```
 
-# Data Pre-processing
-
-::: panel-tabset
-
-## Collapsing over speed and eccentricity
-
-This will leave us with motion direction as the only condition. I will be using this data analysis for the initial analysis on whether not qualitative individual differences exist (comparing "fugal" and "petal" foveal motion).
+# Read in Data
 
 ```{r}
-# raw data folder path (N=88)
-data_folder <- "/Users/imanelattab/Desktop/Honours/Data/Raw_Data_FULL" # ADJUST TO YOUR OWN PATH!
+# FLE data everaged over conditions
+# N=87, 
+FLE_block_data <- read.csv("FLE_Sep2026_block_data.csv")
 
-# import participant fikes
-file_paths <- list.files(
-  path = data_folder,
-  pattern = "\\.csv$",
-  full.names = TRUE
-)
+FLE_block_speed_data <- read.csv("FLE_Sep2026_block_speed_data.csv")
 
-raw_FLE_data <- map_dfr(file_paths, \(file_path) {
-  
-  read_csv(
-    file_path,
-    na = c("", "NA", "NaN"),
-    show_col_types = FALSE
-  ) |>
-    mutate(
-      # extract IDs such as "001" from the beginning of each filename
-      ID = str_extract(basename(file_path), "^\\d+"),
-      source_file = basename(file_path),
-      source_row = row_number(),
-      .before = 1
-    )
-})
+FLE_trial_data <- read.csv("FLE_Sep2026_trial_data.csv")
 ```
-
-```{r}
-
-# <---------EXCLUSION CRITERIA--------->
-FLE_data_flagged <- raw_FLE_data |>
-  mutate(
-    missing_foveal_offset = is.na(foveal_offset),
-    
-    excessive_skipped_frames =
-      !is.na(stim_skipped_frames) &
-      stim_skipped_frames > 1,
-    
-    exclusion_reason = case_when(
-      missing_foveal_offset & excessive_skipped_frames ~
-        "Missing foveal offset and >1 skipped frames",
-      
-      missing_foveal_offset ~
-        "Missing foveal offset",
-      
-      excessive_skipped_frames ~
-        ">1 skipped frames",
-      
-      TRUE ~ NA_character_
-    ),
-    
-    excluded = !is.na(exclusion_reason)
-  )
-```
-
-```{r}
-# <--------new cleaned data---------->
-clean_FLE_trials <- FLE_data_flagged |>
-  filter(!excluded) |>
-  mutate(
-    # retain the original signed offset
-    foveal_offset_og = foveal_offset,
-    
-    # reverse sign for only petal trials
-    FLE_dva = if_else(
-      motion_direction == "petal",
-      -foveal_offset,
-      foveal_offset
-    )
-  ) |>
-  select(
-    ID,
-    source_file,
-    block,
-    trial,
-    condition,
-    motion_direction,
-    eccentricity_dva,
-    speed_dva,
-    foveal_offset_og,
-    FLE_dva,
-    everything(),
-    -foveal_offset,
-    -excluded,
-    -exclusion_reason,
-    -missing_foveal_offset,
-    -excessive_skipped_frames
-  ) |>
-  arrange(ID, block, trial)
-```
-
-```{r}
-
-# <----------aggregate over conditions per block---------->
-
-FLE_block_data <- clean_FLE_trials |>
-  mutate(
-    # Convert each individual motion trial from dva to ms
-    FLE_ms_trial = if_else(
-      condition == "centralcue" & !is.na(speed_dva),
-      (FLE_dva / speed_dva) * 1000,
-      NA_real_
-    ),
-    
-    FLE_condition = case_when(
-      condition == "flashbaseline" ~ "flashbaseline",
-      
-      condition == "centralcue" &
-        motion_direction == "petal" ~ "petal",
-      
-      condition == "centralcue" &
-        motion_direction == "fugal" ~ "fugal",
-      
-      TRUE ~ NA_character_
-    )
-  ) |>
-  filter(!is.na(FLE_condition)) |>
-  group_by(
-    ID,
-    block,
-    FLE_condition
-  ) |>
-  summarise(
-    # Spatial average across speed and eccentricity
-    FLE_dva = mean(FLE_dva),
-    
-    # Temporal average after trial-level conversion
-    FLE_ms = if_else(
-      all(is.na(FLE_ms_trial)),
-      NA_real_,
-      mean(FLE_ms_trial, na.rm = TRUE)
-    ),
-    
-    n_trials = n(),
-    n_temporal_trials = sum(!is.na(FLE_ms_trial)),
-    .groups = "drop"
-  ) |>
-  mutate(
-    FLE_condition = factor(
-      FLE_condition,
-      levels = c("flashbaseline", "petal", "fugal")
-    )
-  ) |>
-  arrange(
-    ID,
-    block,
-    FLE_condition
-  )
-
-```
-
-```{r}
-# <-------check number of retained rows-------->
-FLE_block_check <- FLE_block_data |>
-  mutate(
-    expected_trials = case_when(
-      FLE_condition == "petal" ~ 12L,
-      FLE_condition == "fugal" ~ 12L,
-      FLE_condition == "flashbaseline" ~ 8L
-    ),
-    missing_trials = expected_trials - n_trials,
-    complete_cell = n_trials == expected_trials
-  )
-
-FLE_block_check
-```
-
-```{r}
-#<--------exclusion report-------->
-excluded_FLE_trials <- FLE_data_flagged |>
-  filter(excluded) |>
-  select(
-    ID,
-    source_file,
-    source_row,
-    block,
-    trial,
-    condition,
-    motion_direction,
-    eccentricity_dva,
-    speed_dva,
-    foveal_offset,
-    stim_skipped_frames,
-    exclusion_reason
-  ) |>
-  arrange(ID, block, trial)
-
-excluded_FLE_trials
-```
-
-```{r}
-# <----------participant level summary--------->
-exclusion_summary <- FLE_data_flagged |>
-  group_by(ID) |>
-  summarise(
-    raw_rows = n(),
-    missing_foveal_offset = sum(missing_foveal_offset),
-    skipped_frames_gt_1 = sum(excessive_skipped_frames),
-    total_excluded = sum(excluded),
-    retained_trials = sum(!excluded),
-    .groups = "drop"
-  )
-```
-
-```{r}
-#<-------------WRITE NEW CSVs--------->
-write_csv(FLE_block_check, "FLE_Sep2026_block_data.csv")
-```
-
-## Preserving speed
-
-```{r}
-# <------aggregate over eccentricity, but retain speed------->
-
-FLE_block_speed_data <- clean_FLE_trials |>
-  mutate(
-    FLE_condition = case_when(
-      condition == "flashbaseline" ~ "flashbaseline",
-      
-      condition == "centralcue" &
-        motion_direction == "petal" ~ "petal",
-      
-      condition == "centralcue" &
-        motion_direction == "fugal" ~ "fugal",
-      
-      TRUE ~ NA_character_
-    )
-  ) |>
-  filter(!is.na(FLE_condition)) |>
-  group_by(
-    ID,
-    block,
-    FLE_condition,
-    speed_dva
-  ) |>
-  summarise(
-    FLE_dva = mean(FLE_dva),
-    n_trials = n(),
-    .groups = "drop"
-  ) |>
-  mutate(
-    FLE_condition = factor(
-      FLE_condition,
-      levels = c("flashbaseline", "petal", "fugal")
-    )
-  ) |>
-  arrange(
-    ID,
-    block,
-    FLE_condition,
-    speed_dva
-  )
-
-# <----FLE in temporal units----->
-FLE_block_speed_data <- FLE_block_speed_data |>
-  mutate(
-    FLE_ms = if_else(
-      FLE_condition %in% c("petal", "fugal") &
-        !is.na(speed_dva),
-      (FLE_dva / speed_dva) * 1000,
-      NA_real_
-    )
-  )
-```
-
-```{r}
-# <--check number of retained trials per aggregated row------>
-
-FLE_block_speed_check <- FLE_block_speed_data |>
-  mutate(
-    expected_trials = case_when(
-      FLE_condition %in% c("petal", "fugal") ~ 4L,
-      FLE_condition == "flashbaseline" ~ 8L,
-      TRUE ~ NA_integer_
-    ),
-    
-    missing_trials = expected_trials - n_trials,
-    complete_cell = n_trials == expected_trials
-  )
-
-FLE_block_speed_check
-```
-
-```{r}
-write_csv(
-  FLE_block_speed_check,
-  "FLE_Sep2026_block_speed_data.csv"
-)
-```
-
-
-
-:::
 
 # Data Visualisations
 
 ::: panel-tabset
+
 
 ## Histogram (DVA)
 
@@ -1454,5 +1166,170 @@ FLE_SD_by_speed |>
   ) +
   theme_classic()
 ```
+
+:::
+
+# Analyses for thesis
+
+::: panel-tabset
+
+## Do observers retain their relative ordering across conditions (speed, motion-direction, eccentricity)?
+
+```{r}
+
+```
+
+
+
+
+## Within vs Between individual variability
+
+```{r}
+FLE_data_og <- read.csv(
+  "/Users/imanelattab/Desktop/Honours/Data/FlashLagPsychHonours/PartB/FLE_Sep2026_block_data.csv"
+)
+
+# Keep only petal motion, preserving the existing block-level summaries
+FLE_data_petal <- FLE_data_og |>
+  filter(FLE_condition == "petal") |>
+  arrange(ID, block)
+
+motion_data <- FLE_data_og |>
+  filter(
+    FLE_condition %in% c("fugal", "petal"),
+    !is.na(ID),
+    !is.na(block),
+    is.finite(FLE_dva)
+  ) |>
+  mutate(
+    ID = factor(ID),
+    block_f = factor(block)
+  )
+
+# Check that the input really contains one row per direction per block
+duplicate_cells <- motion_data |>
+  count(ID, block, FLE_condition) |>
+  filter(n > 1L)
+
+if (nrow(duplicate_cells) > 0L) {
+  stop("Multiple rows per ID × block × direction: check aggregation.")
+}
+
+FLE_fugal <- motion_data |>
+  filter(FLE_condition == "fugal")
+
+FLE_petal <- motion_data |>
+  filter(FLE_condition == "petal")
+
+# Equal-weighted average of the two directions within each block.
+# Retain only blocks with both directions available.
+FLE_collapsed <- motion_data |>
+  group_by(ID, block, block_f) |>
+  summarise(
+    FLE_dva = mean(FLE_dva),
+    n_directions = n_distinct(FLE_condition),
+    .groups = "drop"
+  ) |>
+  filter(n_directions == 2L) |>
+  mutate(FLE_condition = "motion_collapsed")
+
+FLE_datasets <- list(
+  fugal = FLE_fugal,
+  petal = FLE_petal,
+  collapsed = FLE_collapsed
+)
+```
+```{r}
+FLE_core_models <- lapply(
+  FLE_datasets,
+  function(dat) {
+    lmer(
+      FLE_dva ~ 1 + (1 | ID),
+      data = dat,
+      REML = TRUE
+    )
+  }
+)
+
+# Overall mean and confidence interval for each direction/summary
+lapply(FLE_core_models, model_parameters)
+```
+```{r}
+extract_variability <- function(model) {
+
+  vc <- as.data.frame(VarCorr(model))
+
+  between_var <- vc$vcov[vc$grp == "ID"]
+  within_var <- sigma(model)^2
+
+  tibble(
+    n_participants = nlevels(model.frame(model)$ID),
+    n_observations = nobs(model),
+
+    between_variance = between_var,
+    within_variance = within_var,
+
+    between_SD_dva = sqrt(between_var),
+    within_SD_dva = sqrt(within_var),
+
+    ICC = between_var / (between_var + within_var),
+
+    singular_fit = isSingular(model)
+  )
+}
+
+core_variability <- bind_rows(
+  lapply(FLE_core_models, extract_variability),
+  .id = "condition"
+)
+
+core_variability
+```
+
+```{r}
+FLE_block_models <- lapply(
+  FLE_datasets,
+  function(dat) {
+    lmer(
+      FLE_dva ~ block_f + (1 | ID),
+      data = dat,
+      REML = TRUE
+    )
+  }
+)
+
+# Fixed block effects
+lapply(FLE_block_models, model_parameters)
+
+# Variability after accounting for average block effects
+block_adjusted_variability <- bind_rows(
+  lapply(FLE_block_models, extract_variability),
+  .id = "condition"
+)
+
+block_adjusted_variability
+```
+
+```{r}
+variability_results <- bind_rows(
+  core_variability |>
+    mutate(model = "Core"),
+
+  block_adjusted_variability |>
+    mutate(model = "Block-adjusted")
+) |>
+  select(
+    model, condition,
+    n_participants, n_observations,
+    between_SD_dva, within_SD_dva,
+    between_variance, within_variance,
+    ICC, singular_fit
+  )
+
+variability_results
+```
+
+
+
 
 :::
